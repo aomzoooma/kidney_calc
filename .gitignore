@@ -16,3 +16,4 @@ backups/
 models/
 coverage/
 .coverage
+.serena
