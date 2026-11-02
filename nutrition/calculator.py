@@ -1,9 +1,17 @@
 """Calculate known nutrient contributions and preserve missing data."""
 
 from decimal import Decimal
+from dataclasses import dataclass
 
 
 NUTRIENTS = ('energy_kcal', 'protein_g', 'sodium_mg', 'potassium_mg', 'phosphorus_mg')
+
+
+@dataclass(frozen=True)
+class Measure:
+    quantity: Decimal
+    unit: str
+    food_state: str
 
 
 def _positive(value):
@@ -13,18 +21,27 @@ def _positive(value):
 def calculate(ingredients, portion):
     """Scale nutrients per reference quantity by quantity and fraction consumed.
 
-    Each ingredient is (quantity, reference_quantity, nutrient_values). Both
-    quantities must use the same unit. None or a missing nutrient means unknown.
+    Each ingredient is (amount, reference, nutrient_values), where amount and
+    reference are Measure values using the same unit and food state. None or
+    a missing nutrient means unknown. No conversion is performed.
     Returns nutrient -> (known subtotal or None, complete).
     """
-    if not ingredients or not _positive(portion) or portion > 1:
+    if not _positive(portion) or portion > 1:
         raise ValueError('A nonempty recipe and portion in (0, 1] are required')
 
     totals = {name: None for name in NUTRIENTS}
     complete = {name: True for name in NUTRIENTS}
-    for quantity, reference, values in ingredients:
-        if not _positive(quantity) or not _positive(reference):
+    found_ingredient = False
+    for amount, reference, values in ingredients:
+        found_ingredient = True
+        if not isinstance(amount, Measure) or not isinstance(reference, Measure):
+            raise ValueError('Amount and reference must specify units and food state')
+        if not _positive(amount.quantity) or not _positive(reference.quantity):
             raise ValueError('Quantities must be positive finite decimals')
+        if (amount.unit not in ('g', 'ml') or amount.unit != reference.unit
+                or amount.food_state not in ('raw', 'cooked', 'as_sold')
+                or amount.food_state != reference.food_state):
+            raise ValueError('Units and food states must be supported and match')
         if set(values) - set(NUTRIENTS):
             raise ValueError('Unknown nutrient key')
         for name in NUTRIENTS:
@@ -34,6 +51,8 @@ def calculate(ingredients, portion):
             elif not isinstance(value, Decimal) or not value.is_finite() or value < 0:
                 raise ValueError('Nutrients must be nonnegative finite decimals or None')
             else:
-                contribution = value * quantity / reference * portion
+                contribution = value * amount.quantity / reference.quantity * portion
                 totals[name] = (totals[name] if totals[name] is not None else Decimal(0)) + contribution
+    if not found_ingredient:
+        raise ValueError('A nonempty recipe and portion in (0, 1] are required')
     return {name: (totals[name], complete[name]) for name in NUTRIENTS}
