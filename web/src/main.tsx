@@ -122,6 +122,7 @@ export function App() {
   const [savedSearchBusy, setSavedSearchBusy] = useState(false)
   const [savedSearchError, setSavedSearchError] = useState('')
   const [savedRecipes, setSavedRecipes] = useState<SavedRecipeSummary[]>([])
+  const [showFavoriteRecipes, setShowFavoriteRecipes] = useState(false)
   const [savedRecipesBusy, setSavedRecipesBusy] = useState(false)
   const [savedRecipesError, setSavedRecipesError] = useState('')
   const [savedRecipeId, setSavedRecipeId] = useState<number | null>(null)
@@ -173,6 +174,8 @@ export function App() {
   const unsupportedThaiQuery = /[\u0E00-\u0E7F]/.test(normalizedUsdaQuery) && !suggestedUsdaQuery && !broadThaiChoices
   const translatedQueryTooLong = translatedQuery?.targetLanguage === 'en'
     && translatedQuery.translation.trim().length > 200
+  const favoriteRecipeCount = savedRecipes.filter(recipe => recipe.favorite).length
+  const visibleSavedRecipes = showFavoriteRecipes ? savedRecipes.filter(recipe => recipe.favorite) : savedRecipes
   const recipeUsesReviewedIngredients = ingredients.length > 0
     && ingredients.every(item => (item.source === 'saved' && item.ingredientVersionId !== null)
       || (item.source === 'seasoning' && item.seasoningVersionId !== null && item.state === 'as_sold'))
@@ -719,7 +722,12 @@ export function App() {
           {savedRecipesBusy && <p role="status" aria-live="polite">กำลังโหลดสูตรที่บันทึกไว้…</p>}
           {savedRecipesError && <p className="error" role="status">{savedRecipesError} <button type="button" className="thai-query-choice" onClick={() => void loadSavedRecipes()}>โหลดอีกครั้ง</button></p>}
           {!savedRecipesBusy && !savedRecipesError && savedRecipes.length === 0 && <p>ยังไม่มีสูตรที่บันทึกไว้ · เพิ่มวัตถุดิบรุ่นที่ตรวจแล้ว ตั้งชื่อสูตร แล้วบันทึกด้านล่าง</p>}
-          <ul className="usda-results">{savedRecipes.map(recipe => <li key={recipe.id}>
+          {!savedRecipesBusy && !savedRecipesError && savedRecipes.length > 0 && <div className="recipe-filters" role="group" aria-label="กรองสูตรอาหาร">
+            <button type="button" className="thai-query-choice" aria-pressed={!showFavoriteRecipes} onClick={() => setShowFavoriteRecipes(false)}>สูตรทั้งหมด ({savedRecipes.length})</button>
+            <button type="button" className="thai-query-choice" aria-pressed={showFavoriteRecipes} onClick={() => setShowFavoriteRecipes(true)}>เมนูโปรด ({favoriteRecipeCount})</button>
+          </div>}
+          {!savedRecipesBusy && !savedRecipesError && showFavoriteRecipes && favoriteRecipeCount === 0 && <p>ยังไม่มีเมนูโปรด · เลือก “สูตรทั้งหมด” แล้วกด “เพิ่มในรายการโปรด” ใต้สูตรที่อยากเปิดซ้ำ</p>}
+          <ul className="usda-results">{visibleSavedRecipes.map(recipe => <li key={recipe.id}>
             <strong>{recipe.name}</strong><small>{recipe.favorite ? 'อยู่ในรายการโปรด' : 'สูตรที่บันทึกไว้ในเครื่อง'}</small>
             <button type="button" className="add-button" disabled={recipeOpenBusyId !== null || recipeSaveBusy || manualSnapshotBusyIndex !== null || usdaReview?.saving === true} onClick={() => void openSavedRecipe(recipe.id)}>{recipeOpenBusyId === recipe.id ? 'กำลังเปิด…' : 'เปิดสูตรนี้'}</button>
             <button type="button" className="thai-query-choice" aria-pressed={recipe.favorite} disabled={recipeFavoriteBusyId !== null || recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null} onClick={() => void toggleSavedRecipeFavorite(recipe)}>{recipeFavoriteBusyId === recipe.id ? 'กำลังบันทึก…' : recipe.favorite ? 'นำออกจากรายการโปรด' : 'เพิ่มในรายการโปรด'}</button>

@@ -447,6 +447,28 @@ describe('manual recipe UI', () => {
     await screen.findByText(/เปิดสูตร “สูตรเดิม” แล้ว/)
   })
 
+  it('filters saved recipes to favorites and opens the selected recipe to repeat it', async () => {
+    const detail = { id: 8, name: 'ข้าวต้มที่ชอบ', favorite: true, ingredients: [{ ingredient_version_id: 24, amount: '60', unit: 'g',
+      food_state: 'cooked', ingredient_name: 'ข้าวสวย', basis_quantity: '100', basis_unit: 'g', reviewed: true,
+      energy_kcal: null, protein_g: '2', sodium_mg: '1', potassium_mg: null, phosphorus_mg: null }] }
+    const fetchMock = vi.fn(async (url: string) => url === '/experimental/recipes'
+      ? { ok: true, json: async () => ({ items: [
+        { id: 7, name: 'สูตรทั่วไป', favorite: false }, { id: 8, name: 'ข้าวต้มที่ชอบ', favorite: true },
+      ] }) }
+      : url === '/experimental/recipes/8' ? { ok: true, json: async () => detail }
+        : url === '/experimental/seasonings' ? { ok: true, json: async () => ({ items: [] }) }
+          : { ok: true, json: async () => response })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    expect(await screen.findByText('สูตรทั่วไป')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'เมนูโปรด (1)' }))
+    expect(screen.queryByText('สูตรทั่วไป')).toBeNull()
+    fireEvent.click(await screen.findByRole('button', { name: 'เปิดสูตรนี้' }))
+    expect(await screen.findByDisplayValue('ข้าวต้มที่ชอบ')).toBeTruthy()
+    expect(fetchMock.mock.calls.some(([url]) => url === '/experimental/recipes/8')).toBe(true)
+  })
+
   it('opens, edits, renames, and favorites a saved recipe', async () => {
     const detail = { id: 7, name: 'ข้าวต้ม', favorite: false, ingredients: [{
       ingredient_version_id: 24, amount: '60', unit: 'g', food_state: 'cooked', ingredient_name: 'ข้าวสวย',
