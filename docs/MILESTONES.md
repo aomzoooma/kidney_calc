@@ -4,7 +4,7 @@ Status: planned; no milestone is complete until evidence is recorded in its PR o
 
 ## M0 — Foundation and feasibility
 
-- Initialize private repo, project instructions, task/PR templates, CI and clean development setup. Record runtime and dependency licenses; do not commit secrets or health data.
+- Initialize repo, project instructions, task/PR templates, CI and clean development setup. The repo is now public; never commit secrets or health data. Record runtime and dependency licenses.
 - Verify Windows 11 machine, GPU, drivers, VRAM, phone/browser and availability of actual Codex agent models. Establish independently reviewed workflow.
 - Run local Typhoon OCR 1.5 3B on representative consented label photos; record exact configuration and field-level accuracy. Investigate RTX 50-series report; document a manual-entry path regardless of results.
 - Assess legal permission and traceable access for each proposed food data source; start source register. Test private remote phone connection, HTTPS, authentication and PWA/camera support without exposing services publicly.

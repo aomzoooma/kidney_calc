@@ -35,7 +35,7 @@ Test the user's chosen Typhoon OCR 1.5 3B using the model provider's prescribed 
 
 ## Security and privacy
 
-Private repo is not a health-data store. Keep patient records, label photos, backups, credentials, API tokens and database files out of Git, issues, CI and agent prompts. Validate uploads, restrict upload size and types, authenticate the single administrator, protect sessions, validate all input, sanitize errors and logs, and use least privilege. Protect remote access with authenticated encrypted transport and access control. Encrypt backups and establish a user-managed recovery procedure; test backup and restore without revealing credentials.
+The repository is public and is not a health-data store. Keep patient records, label photos, backups, credentials, API tokens and database files out of Git, issues, CI and agent prompts. Validate uploads, restrict upload size and types, authenticate the single administrator, protect sessions, validate all input, sanitize errors and logs, and use least privilege. Protect remote access with authenticated encrypted transport and access control. Encrypt backups and establish a user-managed recovery procedure; test backup and restore without revealing credentials.
 
 ## Implementation and governance
 

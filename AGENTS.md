@@ -8,6 +8,8 @@ Git workflow: `develop` is the default integration branch. Create every agent ta
 
 Preferred agent models: GPT-6 Luna for implementation and routine tests; GPT-6.1 Terra for independent review, QA, and orchestration when available. Check actual model availability at execution time; report any fallback. The current session's orchestrator model cannot be changed by this file.
 
+Windows handoff: start with docs/WINDOWS_SETUP.md and docs/WINDOWS_OCR_TEST.md. The GitHub repository is public: never upload patient information, labels, secrets, databases, backups, or model weights. Check current branch, PRs, and open issues before work. Do not poll or wait for active agents; continue independent work and process their reports when delivered.
+
 Maintain unit, integration, and critical-flow E2E coverage appropriate to each milestone; test unknown values, units, portions, rounding, history, input validation and backup restoration. Record actual test and review outcomes in the PR. Protect authentication, local data, uploads, and backup. Bind services to localhost and use authenticated private access; never expose database or OCR publicly. Confirm remote access and camera on a real phone before release. Do not deploy without explicit authorization.
 
 For TypeScript domain dates use Temporal, Asia/Bangkok for the patient's civil day. Keep interfaces Thai, mobile-first, accessible, and usable by an older caregiver. No invented values or clinical clearance. Preserve unrelated changes.
