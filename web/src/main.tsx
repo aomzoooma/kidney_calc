@@ -144,6 +144,8 @@ export function App() {
   const invalidHandled = useRef(false)
   const revision = useRef(0)
   const usdaReviewRequest = useRef(0)
+  const savedRecipesLoadRequest = useRef(0)
+  const savedRecipesMutationRevision = useRef(0)
   const savedSearchRevision = useRef(0)
   const usdaSearchRevision = useRef(0)
   const queryTranslationRevision = useRef(0)
@@ -425,17 +427,22 @@ export function App() {
   }
 
   async function loadSavedRecipes() {
+    const requestId = ++savedRecipesLoadRequest.current
+    const mutationRevision = savedRecipesMutationRevision.current
     setSavedRecipesBusy(true)
     try {
       const response = await fetch('/experimental/recipes')
       const payload = await response.json()
       if (!response.ok || !Array.isArray(payload.items)) throw new Error('Recipe list unavailable')
+      if (requestId !== savedRecipesLoadRequest.current || mutationRevision !== savedRecipesMutationRevision.current) return
       setSavedRecipes(payload.items.filter(isSavedRecipeSummary))
       setSavedRecipesError('')
     } catch {
-      setSavedRecipesError('โหลดสูตรที่บันทึกไว้ไม่ได้ · ตรวจว่า API รองรับการบันทึกสูตรและทำงานอยู่บนเครื่องนี้')
+      if (requestId === savedRecipesLoadRequest.current && mutationRevision === savedRecipesMutationRevision.current) {
+        setSavedRecipesError('โหลดสูตรที่บันทึกไว้ไม่ได้ · ตรวจว่า API รองรับการบันทึกสูตรและทำงานอยู่บนเครื่องนี้')
+      }
     } finally {
-      setSavedRecipesBusy(false)
+      if (requestId === savedRecipesLoadRequest.current) setSavedRecipesBusy(false)
     }
   }
 
@@ -471,7 +478,7 @@ export function App() {
   }
 
   async function saveRecipe() {
-    if (!canSaveRecipe || recipeSaveBusy || recipeOpenBusyId !== null) return
+    if (!canSaveRecipe || recipeSaveBusy || recipeOpenBusyId !== null || recipeFavoriteBusyId !== null) return
     const name = recipeName.trim()
     const submittedRevision = revision.current
     const recipeIngredients = ingredients.map(item => ({
@@ -507,8 +514,11 @@ export function App() {
           if (!renamed.ok) throw new Error('Recipe rename failed')
         }
       }
-      const summary = { id, name, favorite: savedRecipes.find(item => item.id === id)?.favorite ?? false }
-      setSavedRecipes(current => [summary, ...current.filter(item => item.id !== id)])
+      savedRecipesMutationRevision.current++
+      setSavedRecipes(current => {
+        const summary = { id, name, favorite: current.find(item => item.id === id)?.favorite ?? false }
+        return [summary, ...current.filter(item => item.id !== id)]
+      })
       setSavedRecipeName(name)
       if (submittedRevision === revision.current) setRecipeDraftChanged(false)
       setRecipeStatus(savedRecipeId === null ? `บันทึกสูตร “${name}” แล้ว` : `บันทึกการเปลี่ยนแปลงของ “${name}” แล้ว`)
@@ -531,6 +541,7 @@ export function App() {
   }
 
   async function toggleSavedRecipeFavorite(recipe: SavedRecipeSummary) {
+    if (recipeSaveBusy || recipeFavoriteBusyId !== null || recipeOpenBusyId !== null) return
     setRecipeFavoriteBusyId(recipe.id); setRecipeError(''); setRecipeStatus('')
     try {
       const favorite = !recipe.favorite
@@ -539,6 +550,7 @@ export function App() {
         body: JSON.stringify({ synthetic_only: true, favorite }),
       })
       if (!response.ok) throw new Error('Favorite update failed')
+      savedRecipesMutationRevision.current++
       setSavedRecipes(current => current.map(item => item.id === recipe.id ? { ...item, favorite } : item))
       setRecipeStatus(favorite ? `เพิ่ม “${recipe.name}” ในรายการโปรดแล้ว` : `นำ “${recipe.name}” ออกจากรายการโปรดแล้ว`)
     } catch {
@@ -776,7 +788,7 @@ export function App() {
             {!recipeUsesReviewedIngredients && <p role="note">บันทึกสูตรได้เมื่อทุกส่วนผสมเป็นวัตถุดิบที่บันทึกและตรวจแล้ว · รายการกรอกเองและเครื่องปรุงที่บันทึกแยกยังใช้บันทึกสูตรไม่ได้ ส่วน USDA ต้องตรวจข้อมูลและบันทึกเป็นวัตถุดิบในเครื่องก่อน · แบบร่างยังอยู่และคำนวณต่อได้</p>}
             {recipeUsesReviewedIngredients && !recipeAmountsValid && <p role="note">กรอกปริมาณที่มากกว่าศูนย์ในทุกวัตถุดิบก่อนบันทึก</p>}
             {recipeUsesReviewedIngredients && recipeAmountsValid && !recipeName.trim() && <p role="note">ใส่ชื่อสูตรก่อนบันทึก</p>}
-            <button type="button" className="submit-button" disabled={!canSaveRecipe || recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving === true} onClick={() => void saveRecipe()}>{recipeSaveBusy ? 'กำลังบันทึก…' : savedRecipeId === null ? 'บันทึกสูตร' : 'บันทึกการเปลี่ยนแปลง'}</button>
+            <button type="button" className="submit-button" disabled={!canSaveRecipe || recipeSaveBusy || recipeOpenBusyId !== null || recipeFavoriteBusyId !== null || usdaReview?.saving === true} onClick={() => void saveRecipe()}>{recipeSaveBusy ? 'กำลังบันทึก…' : savedRecipeId === null ? 'บันทึกสูตร' : 'บันทึกการเปลี่ยนแปลง'}</button>
           </section>
           <section className="portion-card"><label htmlFor="portion">สัดส่วนของสูตรที่รับประทาน</label><div><input id="portion" disabled={recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving === true} required inputMode="decimal" type="number" min="0.00000001" max="1" step="any" value={portion} onChange={e => { if (recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving) return; revision.current++; setRecipeDraftChanged(true); setPortion(e.target.value); setResult(null) }} /><span>0.5 = ครึ่งสูตร · 1 = สูตรทั้งหมด</span></div></section>
           <label className="attestation"><input type="checkbox" required /> ยืนยันว่ากำลังทดสอบด้วยสูตรสมมติ ไม่ใช่อาหารหรือข้อมูลผู้ป่วยจริง</label>

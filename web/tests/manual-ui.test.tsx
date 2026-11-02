@@ -98,6 +98,72 @@ describe('manual recipe UI', () => {
     ] })
   })
 
+  it('does not let a delayed initial recipe list erase a newly created recipe', async () => {
+    let releaseList!: (value: { ok: boolean; json: () => Promise<{ items: object[] }> }) => void
+    const listPending = new Promise<{ ok: boolean; json: () => Promise<{ items: object[] }> }>(resolve => { releaseList = resolve })
+    const saved = { ingredient_id: 8, version_id: 24, name: 'ข้าวสวย', brand: null, version: '1', provider: 'fixture',
+      source_version: 'v1', source_date: null, retrieved_on: '2026-11-03', source_reference: 'fixture', provenance: 'synthetic',
+      basis_quantity: '100', basis_unit: 'g', food_state: 'cooked', reviewed: true,
+      nutrients: { energy_kcal: null, protein_g: '2', sodium_mg: '1', potassium_mg: null, phosphorus_mg: null } }
+    const fetchMock = vi.fn((url: string, options?: RequestInit) => {
+      if (url === '/experimental/recipes' && options?.method === 'POST') return Promise.resolve({ ok: true, json: async () => ({ id: 42 }) })
+      if (url === '/experimental/recipes') return listPending
+      if (url === '/experimental/seasonings') return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+      if (url.startsWith('/experimental/ingredients/search')) return Promise.resolve({ ok: true, json: async () => ({ items: [saved] }) })
+      return Promise.resolve({ ok: true, json: async () => response })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getByLabelText('ชื่อที่บันทึกไว้'), { target: { value: 'ข้าว' } })
+    fireEvent.click(screen.getByRole('button', { name: 'ค้นหารายการในเครื่อง' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'เลือกเป็นรายการใหม่' }))
+    fireEvent.click(screen.getByRole('button', { name: 'ลบวัตถุดิบ 1' }))
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] .field-grid input[type="number"]')!, { target: { value: '80' } })
+    fireEvent.change(screen.getByLabelText('ชื่อสูตร'), { target: { value: 'ข้าวต้มใหม่' } })
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกสูตร' }))
+    await screen.findByText('บันทึกสูตร “ข้าวต้มใหม่” แล้ว')
+    await act(async () => { releaseList({ ok: true, json: async () => ({ items: [] }) }); await listPending })
+    expect(screen.getByRole('button', { name: 'เปิดสูตรนี้' })).toBeTruthy()
+    expect(screen.getByText('ข้าวต้มใหม่')).toBeTruthy()
+  })
+
+  it('serializes favorite changes with recipe saves', async () => {
+    let releaseFavorite!: (value: { ok: boolean; json: () => Promise<object> }) => void
+    let releaseSave!: (value: { ok: boolean; json: () => Promise<object> }) => void
+    const favoritePending = new Promise<{ ok: boolean; json: () => Promise<object> }>(resolve => { releaseFavorite = resolve })
+    const savePending = new Promise<{ ok: boolean; json: () => Promise<object> }>(resolve => { releaseSave = resolve })
+    const detail = { id: 7, name: 'ข้าวต้ม', favorite: false, ingredients: [{ ingredient_version_id: 24, amount: '60', unit: 'g',
+      food_state: 'cooked', ingredient_name: 'ข้าวสวย', basis_quantity: '100', basis_unit: 'g', reviewed: true,
+      energy_kcal: null, protein_g: '2', sodium_mg: '1', potassium_mg: null, phosphorus_mg: null }] }
+    const fetchMock = vi.fn((url: string, options?: RequestInit) => {
+      if (url === '/experimental/recipes') return Promise.resolve({ ok: true, json: async () => ({ items: [{ id: 7, name: 'ข้าวต้ม', favorite: false }] }) })
+      if (url === '/experimental/seasonings') return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+      if (url === '/experimental/recipes/7' && options?.method === 'PATCH' && JSON.parse(String(options.body)).favorite) return favoritePending
+      if (url === '/experimental/recipes/7/ingredients' && options?.method === 'PUT') return savePending
+      if (url === '/experimental/recipes/7') return Promise.resolve({ ok: true, json: async () => detail })
+      return Promise.resolve({ ok: true, json: async () => response })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    fireEvent.click(await screen.findByRole('button', { name: 'เปิดสูตรนี้' }))
+    await screen.findByDisplayValue('ข้าวต้ม')
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] .field-grid input[type="number"]')!, { target: { value: '75' } })
+    fireEvent.click(screen.getByRole('button', { name: 'เพิ่มในรายการโปรด' }))
+    const save = screen.getByRole('button', { name: 'บันทึกการเปลี่ยนแปลง' }) as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    fireEvent.click(save)
+    expect(fetchMock.mock.calls.some(([url, options]) => url === '/experimental/recipes/7/ingredients' && options?.method === 'PUT')).toBe(false)
+    await act(async () => { releaseFavorite({ ok: true, json: async () => ({ updated: true }) }); await favoritePending })
+    await screen.findByRole('button', { name: 'นำออกจากรายการโปรด' })
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการเปลี่ยนแปลง' }))
+    expect((screen.getByRole('button', { name: 'นำออกจากรายการโปรด' }) as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => { releaseSave({ ok: true, json: async () => ({ updated: true }) }); await savePending })
+    await screen.findByText('บันทึกการเปลี่ยนแปลงของ “ข้าวต้ม” แล้ว')
+    expect(screen.getByText('อยู่ในรายการโปรด')).toBeTruthy()
+  })
+
   it('locks recipe identity and editing while a new recipe save is pending', async () => {
     let releaseCreate!: (value: { ok: boolean; json: () => Promise<{ id: number; name: string }> }) => void
     const createPending = new Promise<{ ok: boolean; json: () => Promise<{ id: number; name: string }> }>(resolve => { releaseCreate = resolve })
