@@ -510,8 +510,10 @@ def calculate_recipe(payload: RecipeInput):
 def create_saved_recipe(payload: SavedRecipeInput):
     try:
         store = _recipe_store()
-        recipe_id = store.create_recipe(payload.name, _recipe_entries(payload.ingredients))
-        return _recipe_response(store.get_recipe(recipe_id))
+        name = payload.name.strip()
+        recipe_id = store.create_recipe(name, _recipe_entries(payload.ingredients))
+        return {"id": recipe_id, "name": name, "saved": True,
+                "experimental": True, "clinical_use": False}
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except sqlite3.Error as exc:
@@ -545,8 +547,13 @@ def update_saved_recipe(recipe_id: int, payload: SavedRecipeUpdateInput):
         raise HTTPException(status_code=422, detail='Provide a recipe name or favorite value')
     try:
         store = _recipe_store()
-        store.update_recipe(recipe_id, name=payload.name, favorite=payload.favorite)
-        return _recipe_response(store.get_recipe(recipe_id))
+        name = payload.name.strip() if payload.name is not None else None
+        store.update_recipe(recipe_id, name=name, favorite=payload.favorite)
+        return {"id": recipe_id, "updated": True,
+                "updated_fields": {key: value for key, value in (
+                    ("name", name), ("favorite", payload.favorite),
+                ) if value is not None},
+                "experimental": True, "clinical_use": False}
     except LookupError as exc:
         raise HTTPException(status_code=404, detail='Recipe not found') from exc
     except ValueError as exc:
@@ -560,7 +567,8 @@ def replace_saved_recipe_ingredients(recipe_id: int, payload: SavedRecipeIngredi
     try:
         store = _recipe_store()
         store.replace_ingredients(recipe_id, _recipe_entries(payload.ingredients))
-        return _recipe_response(store.get_recipe(recipe_id))
+        return {"id": recipe_id, "ingredients_updated": True,
+                "experimental": True, "clinical_use": False}
     except LookupError as exc:
         raise HTTPException(status_code=404, detail='Recipe not found') from exc
     except ValueError as exc:

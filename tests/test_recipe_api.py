@@ -1,6 +1,7 @@
 """Synthetic-only recipe persistence API integration tests."""
 
 import os
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from api.main import app, _demo_store
 from nutrition.profiles import ProfileStore
+from nutrition.recipes import RecipeStore
 from nutrition.tracking import MealTrackingStore
 
 
@@ -50,8 +52,7 @@ class RecipeApiTest(unittest.TestCase):
         self.assertEqual(created.status_code, 200)
         recipe_id = created.json()['id']
         self.assertEqual(created.json()['name'], 'Synthetic rice meal')
-        self.assertEqual([item['ingredient_version_id'] for item in created.json()['ingredients']],
-                         [self.rice['version_id'], self.sauce['version_id']])
+        self.assertTrue(created.json()['saved'])
         self.assertEqual(self.client.get('/experimental/recipes').json()['items'], [
             {'id': recipe_id, 'name': 'Synthetic rice meal', 'favorite': False},
         ])
@@ -66,7 +67,9 @@ class RecipeApiTest(unittest.TestCase):
             'synthetic_only': True, 'name': 'Renamed meal', 'favorite': True,
         })
         self.assertEqual(updated.status_code, 200)
-        self.assertEqual((updated.json()['name'], updated.json()['favorite']), ('Renamed meal', True))
+        self.assertEqual(updated.json()['updated_fields'], {'name': 'Renamed meal', 'favorite': True})
+        reloaded = self.client.get(f'/experimental/recipes/{recipe_id}').json()
+        self.assertEqual((reloaded['name'], reloaded['favorite']), ('Renamed meal', True))
 
         calculated = self.client.post(f'/experimental/recipes/{recipe_id}/calculate', json={
             'synthetic_only': True, 'portion': '0.5',
@@ -86,12 +89,44 @@ class RecipeApiTest(unittest.TestCase):
         ]}
         changed = self.client.put(f'/experimental/recipes/{recipe_id}/ingredients', json=replacement)
         self.assertEqual(changed.status_code, 200)
-        self.assertEqual([item['ingredient_version_id'] for item in changed.json()['ingredients']],
+        self.assertTrue(changed.json()['ingredients_updated'])
+        self.assertEqual([item['ingredient_version_id'] for item in
+                          self.client.get(f'/experimental/recipes/{recipe_id}').json()['ingredients']],
                          [self.sauce['version_id']])
         replacement['ingredients'][0]['ingredient_version_id'] = 999999
         self.assertEqual(self.client.put(f'/experimental/recipes/{recipe_id}/ingredients', json=replacement).status_code, 422)
         reloaded = self.client.get(f'/experimental/recipes/{recipe_id}').json()
         self.assertEqual([item['ingredient_version_id'] for item in reloaded['ingredients']], [self.sauce['version_id']])
+
+    def test_write_ack_survives_post_commit_read_failure(self):
+        with patch.object(RecipeStore, 'get_recipe', side_effect=sqlite3.OperationalError('read must not happen')):
+            response = self.client.post('/experimental/recipes', json=self.recipe_payload())
+            self.assertEqual(response.status_code, 200)
+            recipe_id = response.json()['id']
+            updated = self.client.patch(f'/experimental/recipes/{recipe_id}', json={
+                'synthetic_only': True, 'name': 'Read failure safe',
+            })
+            self.assertEqual(updated.status_code, 200)
+            replaced = self.client.put(f'/experimental/recipes/{recipe_id}/ingredients', json={
+                'synthetic_only': True, 'ingredients': self.recipe_payload()['ingredients'],
+            })
+            self.assertEqual(replaced.status_code, 200)
+        self.assertTrue(self.client.get(f'/experimental/recipes/{recipe_id}').json()['ingredients'])
+
+    def test_update_ack_survives_concurrent_delete_after_commit(self):
+        recipe_id = self.client.post('/experimental/recipes', json=self.recipe_payload()).json()['id']
+        original = RecipeStore.update_recipe
+
+        def update_then_delete(store, target_id, **changes):
+            original(store, target_id, **changes)
+            store.delete_recipe(target_id)
+
+        with patch.object(RecipeStore, 'update_recipe', update_then_delete):
+            response = self.client.patch(f'/experimental/recipes/{recipe_id}', json={
+                'synthetic_only': True, 'name': 'Updated before concurrent delete',
+            })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['id'], recipe_id)
 
     def test_recipe_requests_reject_non_synthetic_and_untrusted_source_fields(self):
         payload = self.recipe_payload()
