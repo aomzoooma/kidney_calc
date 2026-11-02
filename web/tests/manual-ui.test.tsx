@@ -558,6 +558,31 @@ describe('manual recipe UI', () => {
     expect((screen.getByLabelText(/ชื่อวัตถุดิบ/) as HTMLInputElement).value).toBe('แบบร่างของฉัน')
   })
 
+  it('restores focus when removing one of several favorites', async () => {
+    const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/experimental/recipes') return { ok: true, json: async () => ({ items: [
+        { id: 7, name: 'ข้าวต้มมื้อแรก', favorite: true }, { id: 8, name: 'ข้าวต้มมื้อสอง', favorite: true },
+      ] }) }
+      if (url === '/experimental/seasonings') return { ok: true, json: async () => ({ items: [] }) }
+      if (url === '/experimental/recipes/7' && options?.method === 'PATCH') return { ok: true, json: async () => ({ updated: true }) }
+      return { ok: true, json: async () => response }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    expect(await screen.findByText('ข้าวต้มมื้อแรก')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'เมนูโปรด (2)' }))
+
+    const firstFavorite = screen.getByText('ข้าวต้มมื้อแรก').closest('li')!
+    const removeFavorite = within(firstFavorite).getByRole('button', { name: 'นำออกจากรายการโปรด' })
+    removeFavorite.focus()
+    fireEvent.click(removeFavorite)
+    expect(await screen.findByText('ข้าวต้มมื้อสอง')).toBeTruthy()
+    expect(await screen.findByText('นำ “ข้าวต้มมื้อแรก” ออกจากรายการโปรดแล้ว')).toBeTruthy()
+    expect(screen.queryByText('ข้าวต้มมื้อแรก')).toBeNull()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'เมนูโปรด (1)' }))
+  })
+
   it('previews and explicitly saves USDA values before using them in a reusable recipe', async () => {
     const preview = { fdc_id: 88, name: 'Rice, cooked', source_type: 'Foundation', source_version: 'fixture-v1',
       source_date: '2026-01-01', food_state: 'cooked', basis_quantity: '100', basis_unit: 'g',

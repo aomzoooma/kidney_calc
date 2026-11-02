@@ -124,6 +124,7 @@ export function App() {
   const [savedRecipes, setSavedRecipes] = useState<SavedRecipeSummary[]>([])
   const [showFavoriteRecipes, setShowFavoriteRecipes] = useState(false)
   const favoriteFilterRef = useRef<HTMLButtonElement>(null)
+  const restoreFavoriteFilterFocus = useRef(false)
   const [savedRecipesBusy, setSavedRecipesBusy] = useState(false)
   const [savedRecipesError, setSavedRecipesError] = useState('')
   const [savedRecipeId, setSavedRecipeId] = useState<number | null>(null)
@@ -209,8 +210,10 @@ export function App() {
   }, [page])
 
   useEffect(() => {
-    if (showFavoriteRecipes && favoriteRecipeCount === 0) favoriteFilterRef.current?.focus()
-  }, [favoriteRecipeCount, showFavoriteRecipes])
+    if (!restoreFavoriteFilterFocus.current) return
+    restoreFavoriteFilterFocus.current = false
+    if (showFavoriteRecipes) favoriteFilterRef.current?.focus()
+  }, [savedRecipes, showFavoriteRecipes])
 
   function navigate(event: React.MouseEvent<HTMLAnchorElement>, nextPage: PageId) {
     event.preventDefault()
@@ -588,6 +591,7 @@ export function App() {
       })
       if (!response.ok) throw new Error('Favorite update failed')
       savedRecipesMutationRevision.current++
+      if (recipe.favorite && showFavoriteRecipes) restoreFavoriteFilterFocus.current = true
       setSavedRecipes(current => current.map(item => item.id === recipe.id ? { ...item, favorite } : item))
       setRecipeStatus(favorite ? `เพิ่ม “${recipe.name}” ในรายการโปรดแล้ว` : `นำ “${recipe.name}” ออกจากรายการโปรดแล้ว`)
     } catch {
