@@ -24,6 +24,7 @@ from nutrition.calculator import NUTRIENTS, Measure, NutrientSource, calculate
 from nutrition.label_parser import parse_nutrition_label
 from nutrition.seasonings import SeasoningStore
 from api.ocr import MAX_IMAGE_BYTES, OCRServiceError, ocr_image
+from nutrition.local_translation import LocalTranslationError, translate_food_text
 from nutrition.usda_fdc import USDAFDCClient, USDAFDCError
 
 
@@ -81,6 +82,13 @@ class OCRInput(BaseModel):
     synthetic_only: Literal[True]
     content_type: Literal["image/png", "image/jpeg"]
     image_base64: str = Field(min_length=1, max_length=4 * ((MAX_IMAGE_BYTES + 2) // 3))
+
+
+class LocalFoodTranslationInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=300)
+    target_language: Literal["en", "th"]
 
 
 class SeasoningNutrients(BaseModel):
@@ -196,6 +204,17 @@ def search_usda_foods(q: str = Query(min_length=1, max_length=200), page: int = 
                 "experimental": True}
     except USDAFDCError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
+@app.post("/experimental/local-food-translation")
+async def translate_local_food_text(payload: LocalFoodTranslationInput):
+    """Optional translation of one food string through Ollama at loopback."""
+    try:
+        translation, model = await translate_food_text(payload.text, payload.target_language)
+    except LocalTranslationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+    return {"translation": translation, "target_language": payload.target_language,
+            "model": model, "transport": "loopback"}
 
 
 @app.middleware("http")

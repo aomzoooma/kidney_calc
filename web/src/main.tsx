@@ -12,6 +12,7 @@ type Result = {
   saved_sources?: Array<{ version_id: number; name: string; provider: string; source_version: string; source_date: string | null; source_reference: string; provenance: string; retrieved_on: string; food_state: FoodState }>
 }
 type USDAFood = { fdc_id: number; description: string; source_type: string; source_version: string | null; food_state: FoodState | null }
+type FoodTextTranslation = { sourceText: string; translation: string; targetLanguage: 'en' | 'th' }
 const emptyValues = (): Ingredient['values'] => ({ energy_kcal: '', protein_g: '', sodium_mg: '', potassium_mg: '', phosphorus_mg: '' })
 const newIngredient = (): Ingredient => ({ name: '', amount: '', unit: 'g', state: 'raw', reference: '100', values: emptyValues(), source: 'manual', seasoningVersionId: null, ingredientVersionId: null, fdcId: null, fdcState: null })
 const stateNames: Record<FoodState, string> = { raw: 'ดิบ', cooked: 'สุก', as_sold: 'ตามสภาพที่ซื้อ' }
@@ -60,6 +61,11 @@ export function App() {
   const [seasoningsError, setSeasoningsError] = useState('')
   const [usdaQuery, setUsdaQuery] = useState('')
   const [selectedThaiSearchChoice, setSelectedThaiSearchChoice] = useState('')
+  const [translatedQuery, setTranslatedQuery] = useState<FoodTextTranslation | null>(null)
+  const [translatedUSDAFoods, setTranslatedUSDAFoods] = useState<Record<number, FoodTextTranslation>>({})
+  const [translationBusy, setTranslationBusy] = useState(false)
+  const [translationBusyKey, setTranslationBusyKey] = useState('')
+  const [translationError, setTranslationError] = useState('')
   const [usdaFoods, setUsdaFoods] = useState<USDAFood[]>([])
   const [usdaError, setUsdaError] = useState('')
   const [usdaBusy, setUsdaBusy] = useState(false)
@@ -71,10 +77,17 @@ export function App() {
   const revision = useRef(0)
   const savedSearchRevision = useRef(0)
   const usdaSearchRevision = useRef(0)
+  const queryTranslationRevision = useRef(0)
+  const translationBusyRef = useRef(false)
+  const currentUSDAQuery = useRef('')
+  const visibleUSDAFoods = useRef<USDAFood[]>([])
   const normalizedUsdaQuery = usdaQuery.trim().replace(/\s+/g, ' ')
+  const queryTranslationTarget: 'en' | 'th' = /[\u0E00-\u0E7F]/.test(normalizedUsdaQuery) ? 'en' : 'th'
   const suggestedUsdaQuery = Object.hasOwn(thaiUsdaSearchTerms, normalizedUsdaQuery) ? thaiUsdaSearchTerms[normalizedUsdaQuery] : undefined
   const broadThaiChoices = Object.hasOwn(broadThaiUsdaSearchChoices, normalizedUsdaQuery) ? broadThaiUsdaSearchChoices[normalizedUsdaQuery] : undefined
   const unsupportedThaiQuery = /[\u0E00-\u0E7F]/.test(normalizedUsdaQuery) && !suggestedUsdaQuery && !broadThaiChoices
+  const translatedQueryTooLong = translatedQuery?.targetLanguage === 'en'
+    && translatedQuery.translation.trim().length > 200
 
   useEffect(() => {
     const syncPage = () => {
@@ -186,12 +199,21 @@ export function App() {
   async function searchUSDA(searchTerm = usdaQuery) {
     const requestRevision = ++usdaSearchRevision.current
     const query = searchTerm.trim()
-    setUsdaBusy(true); setUsdaError(''); setUsdaFoods([])
+    if (query.length > 200) {
+      setUsdaError('คำค้น USDA ต้องไม่เกิน 200 ตัวอักษร · โปรดแก้คำค้นแล้วลองใหม่')
+      return
+    }
+    visibleUSDAFoods.current = []
+    setTranslatedUSDAFoods({})
+    setUsdaBusy(true); setUsdaError(''); setTranslationError(''); setUsdaFoods([])
     try {
       const response = await fetch(`/experimental/usda/search?q=${encodeURIComponent(query)}`)
       const payload = await response.json()
       if (!response.ok) throw new Error(typeof payload.detail === 'string' ? payload.detail : 'ค้นหาฐานข้อมูล USDA ไม่สำเร็จ')
-      if (requestRevision === usdaSearchRevision.current) setUsdaFoods(payload.items as USDAFood[])
+      if (requestRevision === usdaSearchRevision.current) {
+        visibleUSDAFoods.current = payload.items as USDAFood[]
+        setUsdaFoods(payload.items as USDAFood[])
+      }
     } catch {
       if (requestRevision === usdaSearchRevision.current) setUsdaError('ค้นหา USDA ไม่สำเร็จ ตรวจ API และ USDA_FDC_API_KEY บนเครื่องนี้')
     } finally {
@@ -201,8 +223,14 @@ export function App() {
 
   function updateUSDAQuery(query: string) {
     usdaSearchRevision.current++
+    queryTranslationRevision.current++
+    currentUSDAQuery.current = query.trim().replace(/\s+/g, ' ')
     setUsdaQuery(query)
     setSelectedThaiSearchChoice('')
+    setTranslatedQuery(null)
+    setTranslatedUSDAFoods({})
+    setTranslationError('')
+    visibleUSDAFoods.current = []
     setUsdaFoods([])
     setUsdaError('')
     setUsdaBusy(false)
@@ -210,10 +238,68 @@ export function App() {
 
   function updateThaiSearchChoice(choice: string) {
     usdaSearchRevision.current++
+    queryTranslationRevision.current++
     setSelectedThaiSearchChoice(choice)
+    setTranslatedQuery(null)
+    setTranslatedUSDAFoods({})
+    visibleUSDAFoods.current = []
     setUsdaFoods([])
     setUsdaError('')
     setUsdaBusy(false)
+  }
+
+  async function requestLocalFoodTranslation(text: string, targetLanguage: 'en' | 'th', busyKey: string) {
+    if (translationBusyRef.current) return null
+    translationBusyRef.current = true
+    setTranslationBusy(true)
+    setTranslationBusyKey(busyKey)
+    setTranslationError('')
+    try {
+      const response = await fetch('/experimental/local-food-translation', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text, target_language: targetLanguage }),
+      })
+      const payload = await response.json()
+      if (!response.ok || typeof payload.translation !== 'string') throw new Error('Local translation unavailable')
+      setTranslationError('')
+      return payload.translation as string
+    } catch {
+      return null
+    } finally {
+      translationBusyRef.current = false
+      setTranslationBusy(false)
+      setTranslationBusyKey('')
+    }
+  }
+
+  async function translateUSDAQuery() {
+    const sourceText = normalizedUsdaQuery
+    if (!sourceText) return
+    const requestRevision = queryTranslationRevision.current
+    const targetLanguage = queryTranslationTarget
+    const translation = await requestLocalFoodTranslation(sourceText, targetLanguage, 'query')
+    if (requestRevision !== queryTranslationRevision.current || currentUSDAQuery.current !== sourceText) return
+    if (!translation) {
+      setTranslationError('แปลไม่สำเร็จ · ตรวจการตั้งค่า Ollama และโมเดลแปล แล้วลองอีกครั้ง')
+      return
+    }
+    setTranslatedQuery({ sourceText, translation, targetLanguage })
+  }
+
+  async function translateUSDAFood(food: USDAFood) {
+    const translation = await requestLocalFoodTranslation(food.description, 'th', String(food.fdc_id))
+    const foodStillVisible = visibleUSDAFoods.current.some(item => item.fdc_id === food.fdc_id
+      && item.description === food.description)
+    if (!foodStillVisible) return
+    if (!translation) {
+      setTranslationError('แปลไม่สำเร็จ · ตรวจการตั้งค่า Ollama และโมเดลแปล แล้วลองอีกครั้ง')
+      return
+    }
+    {
+      setTranslatedUSDAFoods(current => ({
+        ...current, [food.fdc_id]: { sourceText: food.description, translation, targetLanguage: 'th' },
+      }))
+    }
   }
 
   function selectSource(index: number, source: IngredientSource) {
@@ -314,6 +400,11 @@ export function App() {
             <h2>แหล่งข้อมูลรอง: USDA FoodData Central</h2>
             <p>ใช้เมื่อไม่มีรายการที่บันทึกไว้เท่านั้น · เป็นข้อมูลอ้างอิง USDA ภาษาอังกฤษ (Foundation / SR Legacy) ไม่ใช่การแปลหรือเทียบอาหารไทย · คำค้นจะถูกส่งไป USDA จึงห้ามใส่ชื่อผู้ป่วยหรือข้อมูลส่วนบุคคล</p>
             <label>ชื่ออาหารหรือคำค้นภาษาไทยหรืออังกฤษ <input value={usdaQuery} onChange={e => updateUSDAQuery(e.target.value)} maxLength={200} autoComplete="off" /></label>
+            <p className="local-translation-note">ส่งเฉพาะคำค้นไปยัง Ollama ที่ตั้งค่า loopback ในเครื่องนี้ · ใช้กับ daemon ที่เชื่อถือได้เท่านั้น · เมื่อยืนยันคำแปลอังกฤษ ระบบส่งข้อความนั้นไปค้น USDA · ห้ามใส่ข้อมูลผู้ป่วย</p>
+            <button type="button" className="thai-query-choice" disabled={!normalizedUsdaQuery || translationBusy} onClick={() => void translateUSDAQuery()}>{translationBusy && translationBusyKey === 'query' ? 'กำลังแปลคำค้น…' : queryTranslationTarget === 'en' ? 'แปลคำค้นไทยเป็นอังกฤษผ่าน Ollama' : 'แปลคำค้นอังกฤษเป็นไทยผ่าน Ollama'}</button>
+            {translationBusy && <p role="status" aria-live="polite">กำลังส่งข้อความอาหารไปแปล…</p>}
+            {translationError && <p className="error" role="alert">{translationError}</p>}
+            {translatedQuery && translatedQuery.sourceText === normalizedUsdaQuery && <div className="thai-query-suggestion" role="status"><span>คำแปลแนะนำจาก Ollama · {translatedQuery.targetLanguage === 'en' ? 'อังกฤษ' : 'ไทย'}</span><strong>{translatedQuery.translation}</strong><small>{translatedQueryTooLong ? 'คำแปลเกินขีดจำกัด USDA 200 ตัวอักษร · ย่อคำค้นแล้วแปลใหม่' : 'เป็นคำช่วยค้นหา/อ่านเท่านั้น · ไม่ยืนยันว่าเป็นอาหารชนิดเดียวกัน · ตรวจชื่อและสภาพ USDA เอง'}</small>{translatedQuery.targetLanguage === 'en' && <button type="button" className="thai-query-choice" disabled={usdaBusy || translationBusy || translatedQueryTooLong} onClick={() => void searchUSDA(translatedQuery.translation)}>ค้นหา USDA ด้วยคำแปลนี้</button>}</div>}
             {suggestedUsdaQuery && <div className="thai-query-suggestion" role="status"><span>คำค้นอังกฤษแนะนำสำหรับ “{normalizedUsdaQuery}”</span><strong>{suggestedUsdaQuery}</strong><small>คำแนะนำใช้ค้นหาเท่านั้น · ชื่อผลลัพธ์คงตาม USDA</small></div>}
             {broadThaiChoices && <div className="thai-query-suggestion" role="group" aria-label={`เลือกส่วนของอาหารสำหรับ ${normalizedUsdaQuery}`}><span>คำว่า “{normalizedUsdaQuery}” กว้างเกินไป · เลือกส่วนที่ต้องการค้นหา</span>{broadThaiChoices.map(choice => <button type="button" className="thai-query-choice" key={choice} aria-pressed={selectedThaiSearchChoice === choice} onClick={() => updateThaiSearchChoice(choice)}>{choice}</button>)}<small>{selectedThaiSearchChoice ? `เลือกคำค้น: ${selectedThaiSearchChoice}` : 'เลือกคำค้นก่อนค้นหา'} · ชื่อผลลัพธ์คงตาม USDA</small></div>}
             {unsupportedThaiQuery && <p className="thai-query-warning" role="note">ยังไม่มีคำค้นไทยที่ชัดเจนสำหรับคำนี้ · ลองระบุชนิดหรือส่วนอาหารให้ชัดขึ้น</p>}
@@ -321,6 +412,7 @@ export function App() {
             <button type="button" className="add-button" disabled={usdaBusy || !usdaQuery.trim() || unsupportedThaiQuery || Boolean(broadThaiChoices && !selectedThaiSearchChoice)} onClick={() => void searchUSDA(selectedThaiSearchChoice || suggestedUsdaQuery || usdaQuery)}>{usdaBusy ? 'กำลังค้นหา…' : suggestedUsdaQuery || selectedThaiSearchChoice ? 'ค้นหา USDA ด้วยคำแนะนำ' : 'ค้นหา USDA'}</button>
             {usdaError && <p className="error" role="alert">{usdaError}</p>}
             <ul className="usda-results">{usdaFoods.map(food => <li key={food.fdc_id}><strong>{food.description}</strong><span className="usda-food-state">สภาพอาหาร: {foodStateLabel(food.food_state)}</span><small>USDA FDC · รายการอ้างอิงไม่ใช่สินค้าแบรนด์ · {food.source_type} · {food.source_version ?? 'รุ่นข้อมูลไม่ระบุ'} · ID {food.fdc_id}</small>
+              {translatedUSDAFoods[food.fdc_id]?.sourceText === food.description ? <div className="thai-query-suggestion" role="status"><span>คำแปลช่วยอ่านจาก Ollama</span><strong>{translatedUSDAFoods[food.fdc_id].translation}</strong><small>ชื่อ USDA และสภาพอาหารด้านบนเป็นข้อมูลต้นฉบับ · คำแปลนี้ไม่ยืนยันเอกลักษณ์ของอาหาร</small></div> : <button type="button" className="thai-query-choice" disabled={translationBusy} onClick={() => void translateUSDAFood(food)}>{translationBusy && translationBusyKey === String(food.fdc_id) ? 'กำลังแปลชื่อ…' : 'แปลชื่อ USDA เป็นไทยผ่าน Ollama'}</button>}
               <button type="button" className="add-button" onClick={() => addUSDAFood(food)}>เพิ่มเป็นรายการใหม่</button></li>)}</ul>
           </section>
           <section className="section-heading"><h2>รายการวัตถุดิบ</h2><button type="button" className="add-button" onClick={addIngredient}>＋ เพิ่มวัตถุดิบ</button></section>
