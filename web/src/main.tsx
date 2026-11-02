@@ -127,6 +127,7 @@ export function App() {
   const restoreFavoriteFilterFocus = useRef(false)
   const savedIngredientSearchRef = useRef<HTMLDetailsElement>(null)
   const usdaFoodSearchRef = useRef<HTMLDetailsElement>(null)
+  const pendingIngredientFocus = useRef<number | null>(null)
   const [savedRecipesBusy, setSavedRecipesBusy] = useState(false)
   const [savedRecipesError, setSavedRecipesError] = useState('')
   const [savedRecipeId, setSavedRecipeId] = useState<number | null>(null)
@@ -136,6 +137,7 @@ export function App() {
   const [recipeSaveBusy, setRecipeSaveBusy] = useState(false)
   const [recipeOpenBusyId, setRecipeOpenBusyId] = useState<number | null>(null)
   const [manualSnapshotBusyIndex, setManualSnapshotBusyIndex] = useState<number | null>(null)
+  const [manualSnapshotError, setManualSnapshotError] = useState('')
   const [recipeFavoriteBusyId, setRecipeFavoriteBusyId] = useState<number | null>(null)
   const [recipeStatus, setRecipeStatus] = useState('')
   const [recipeError, setRecipeError] = useState('')
@@ -171,6 +173,12 @@ export function App() {
   const visibleUSDAFoods = useRef<USDAFood[]>([])
   const ingredientsRef = useRef(ingredients)
   ingredientsRef.current = ingredients
+  useEffect(() => {
+    const index = pendingIngredientFocus.current
+    if (index === null || openIngredient !== index) return
+    pendingIngredientFocus.current = null
+    document.querySelector<HTMLInputElement>(`[data-ingredient-index="${index}"] input[aria-label="ปริมาณที่ใช้ในสูตร"]`)?.focus()
+  }, [ingredients, openIngredient])
   const normalizedUsdaQuery = usdaQuery.trim().replace(/\s+/g, ' ')
   const queryTranslationTarget: 'en' | 'th' = /[\u0E00-\u0E7F]/.test(normalizedUsdaQuery) ? 'en' : 'th'
   const suggestedUsdaQuery = Object.hasOwn(thaiUsdaSearchTerms, normalizedUsdaQuery) ? thaiUsdaSearchTerms[normalizedUsdaQuery] : undefined
@@ -310,13 +318,14 @@ export function App() {
     clearUSDAReview()
     setRecipeDraftChanged(true)
     const index = ingredients.length
+    pendingIngredientFocus.current = index
     setIngredients(current => [...current, { ...newIngredient(), name: food.name,
       source: 'saved', ingredientVersionId: food.version_id, unit: food.basis_unit,
       state: food.food_state, reference: food.basis_quantity,
       values: Object.fromEntries(nutrients.map(([key]) => [key, food.nutrients[key] ?? ''])) as Ingredient['values'] }])
     setOpenIngredient(index)
     setResult(null)
-    closeRecipeSearches()
+    if (savedIngredientSearchRef.current) savedIngredientSearchRef.current.open = false
   }
 
   async function searchUSDA(searchTerm = usdaQuery) {
@@ -447,15 +456,11 @@ export function App() {
     clearUSDAReview()
     setRecipeDraftChanged(true)
     const index = ingredients.length
+    pendingIngredientFocus.current = index
     setIngredients(current => [...current, { ...newIngredient(), source: 'usda', name: food.description,
       fdcId: food.fdc_id, fdcState: foodState, state: foodState }])
     setOpenIngredient(index)
     setResult(null)
-    closeRecipeSearches()
-  }
-
-  function closeRecipeSearches() {
-    if (savedIngredientSearchRef.current) savedIngredientSearchRef.current.open = false
     if (usdaFoodSearchRef.current) usdaFoodSearchRef.current.open = false
   }
 
@@ -815,7 +820,6 @@ export function App() {
             {item.fdcId !== null && <p className="footnote">ข้อมูล USDA เป็นของอาหารหนึ่งรายการ · แก้ปริมาณที่ใช้ในสูตรได้ แต่แก้ค่าสารอาหารต้นทางไม่ได้ · USDA FoodData Central ID {item.fdcId} · สภาพ {foodStateLabel(item.fdcState)}</p>}
             {item.fdcId !== null && <div className="thai-query-suggestion">
               <button type="button" className="thai-query-choice" disabled={recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving === true || usdaReview?.busy === true} onClick={() => void previewUSDAIngredient(index)}>{usdaReview?.index === index && usdaReview.fdcId === item.fdcId && usdaReview.busy ? 'กำลังตรวจข้อมูล USDA…' : 'ตรวจข้อมูล USDA ก่อนบันทึกในเครื่อง'}</button>
-              {usdaReview?.index === index && usdaReview.fdcId === item.fdcId && item.source === 'usda' && usdaReview.error && <p className="error" role="alert">{usdaReview.error}</p>}
               {usdaReview?.index === index && usdaReview.fdcId === item.fdcId && item.source === 'usda' && usdaReview.data && <div>
                 <strong>ตรวจข้อมูลก่อนบันทึก</strong>
                 <p>{usdaReview.data.name} · {usdaReview.data.source_type} · {usdaReview.data.source_version ?? 'รุ่นไม่ระบุ'} · วันที่ {usdaReview.data.source_date ?? 'ไม่ระบุ'} · {stateNames[usdaReview.data.food_state]} · ต่อ {usdaReview.data.basis_quantity} กรัม</p>
@@ -836,7 +840,9 @@ export function App() {
             {item.source === 'manual' && <details className="ingredient-advanced"><summary>แหล่งข้อมูลและบันทึกรุ่นวัตถุดิบ</summary><RecipeIngredientSnapshotForm ingredient={item}
               disabled={manualSnapshotBusyIndex !== null}
               onBusyChange={isBusy => setManualSnapshotBusyIndex(isBusy ? index : null)}
+              onErrorChange={setManualSnapshotError}
               onSaved={versionId => {
+                setManualSnapshotError('')
                 if (ingredientsRef.current[index] !== item || ingredientsRef.current[index]?.source !== 'manual') {
                   setRecipeStatus('บันทึกวัตถุดิบในเครื่องแล้ว แต่แถวสูตรเปลี่ยนไป · ค้นหารุ่นที่บันทึกไว้แล้วเลือกเพิ่มอีกครั้ง')
                   return
@@ -870,6 +876,8 @@ export function App() {
         </form>
         {recipeStatus && <p className="status-line" role="status" aria-live="polite">{recipeStatus}</p>}
         {recipeError && <p className="error" role="alert">{recipeError}</p>}
+        {usdaReview?.error && <p className="error" role="alert">{usdaReview.error}</p>}
+        {manualSnapshotError && <p className="error" role="alert">{manualSnapshotError}</p>}
         {seasoningsError && <p className="error" role="status">{seasoningsError}</p>}
         {error && <p className="error" role="alert">{error}</p>}
         {result && <section className="results" aria-live="polite" aria-labelledby="results-title"><div className="result-title"><h2 id="results-title">สารอาหารโดยประมาณ · {result.portion} ของสูตร</h2><span className="status-pill">ไม่ใช่คำแนะนำทางการแพทย์</span></div>
