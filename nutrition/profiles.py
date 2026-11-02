@@ -87,6 +87,12 @@ class ProfileStore:
             cursor = db.execute("INSERT INTO patient_profiles(name) VALUES (?)", (name,))
             return cursor.lastrowid
 
+    def list_profiles(self) -> list[dict]:
+        with self._connect() as db:
+            return [dict(row) for row in db.execute(
+                "SELECT id, name FROM patient_profiles ORDER BY id DESC"
+            ).fetchall()]
+
     def add_dry_weight(self, profile_id: int, measured_on: str, kilograms: float) -> int:
         profile_id = _profile_id(profile_id)
         measured_on = _day(measured_on, "measured_on")

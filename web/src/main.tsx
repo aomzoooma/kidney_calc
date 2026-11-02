@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { buildCalculationPayload, isCurrentRevision, nutrients, type FoodState, type Ingredient, type IngredientSource, type NutrientKey, type SavedIngredient, type SavedSeasoning } from './request'
 import { ManualIngredientForm } from './ManualIngredientForm'
 import { OcrPreview } from './OcrPreview'
+import { ProfileManager } from './ProfileManager'
 import './style.css'
 
 type Result = {
@@ -364,10 +365,11 @@ export function App() {
         <p>ถ่ายหรือเลือกภาพทดสอบ ตรวจค่าที่อ่านได้ แล้วบันทึกเฉพาะหลังตรวจสอบ</p>
         <a className="home-action" href="#ingredients" onClick={event => navigate(event, 'ingredients')}>วัตถุดิบและเครื่องปรุง <span>เพิ่มจากภาพทดสอบ</span></a>
         <a className="home-action" href="#recipes" onClick={event => navigate(event, 'recipes')}>สูตรอาหาร <span>เปิดเครื่องคำนวณทดลอง</span></a>
+        <a className="home-action" href="#patients" onClick={event => navigate(event, 'patients')}>โปรไฟล์ข้อมูลสมมติ <span>บันทึกเป้าหมายที่ได้รับและน้ำหนักแห้ง</span></a>
         <h2 className="home-subheading">ส่วนที่กำลังพัฒนา</h2>
-        <p>ข้อมูลผู้ป่วยและบันทึกอาหารยังไม่มีระบบบันทึก</p>
+        <p>บันทึกอาหารยังไม่มีระบบบันทึก</p>
       </section>}
-      {page === 'patients' && <section className="placeholder-page" aria-labelledby="patients-title"><h1 id="patients-title">ผู้ป่วย</h1><p className="status-line">กำลังพัฒนา</p><p>ส่วนนี้ยังไม่มีระบบสร้างหรือบันทึกโปรไฟล์ผู้ป่วย โปรดอย่ากรอกข้อมูลจริงในต้นแบบนี้</p></section>}
+      {page === 'patients' && <ProfileManager />}
       {ingredientsVisited && <section hidden={page !== 'ingredients'} aria-labelledby="ingredients-title"><div className="page-intro"><h1 id="ingredients-title">วัตถุดิบและเครื่องปรุง</h1><p>การอ่านภาพและบันทึกยังเป็นการทดลอง ใช้ภาพทดสอบเท่านั้น</p></div><OcrPreview /><ManualIngredientForm /></section>}
       {page === 'recipes' && <section aria-labelledby="recipe-title">
         <div className="page-intro"><h1 id="recipe-title">สูตรอาหาร</h1><p>เครื่องคำนวณทดลอง ยังไม่มีระบบบันทึกสูตร · USDA เป็นข้อมูลอาหารจริงสาธารณะ</p></div>

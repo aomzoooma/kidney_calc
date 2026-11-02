@@ -104,6 +104,16 @@ input::placeholder { color: #87958d; }
 .home-subheading { margin-top: 1.8rem !important; }
 .placeholder-page { max-width: 40rem; margin: 1rem 0; padding: .2rem 0 1rem; }
 .status-line { display: inline-block; padding: .25rem .6rem; color: #72501c; background: #fff3d6; border-radius: .5rem; font-weight: 750; }
+.profile-section { margin: 1.5rem 0; padding-top: 1rem; border-top: 1px solid var(--line); }
+.profile-section h2 { margin: 0 0 .65rem; }
+.profile-section form { max-width: 36rem; margin: .8rem 0; }
+.profile-section label { display: block; margin: .7rem 0; font-weight: 700; }
+.profile-section input, .profile-section select { display: block; width: 100%; margin-top: .25rem; padding: .5rem .65rem; color: #22382f; border: 1px solid #aebeb3; border-radius: .55rem; background: #fff; }
+.profile-section .submit-button { margin-top: .4rem; }
+.profile-empty { color: var(--muted); padding: .5rem 0; }
+.profile-records { list-style: none; margin: .4rem 0 1rem; padding: 0; }
+.profile-records li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .2rem .8rem; padding: .65rem .1rem; border-bottom: 1px solid #edf1ee; }
+.profile-records span { color: var(--muted); }
 .seasoning-flow { margin: 1.5rem 0 2rem; padding: 1rem; border: 1px solid var(--line); border-radius: 1rem; background: #fff; box-shadow: 0 3px 12px #173d2b0a; }
 .seasoning-heading { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: .8rem; }
 .seasoning-heading h2 { margin-top: .15rem; }

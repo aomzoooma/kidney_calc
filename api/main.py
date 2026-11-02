@@ -23,6 +23,7 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictInt, V
 from nutrition.calculator import NUTRIENTS, Measure, NutrientSource, calculate
 from nutrition.label_parser import parse_nutrition_label
 from nutrition.seasonings import SeasoningStore
+from nutrition.profiles import ProfileStore
 from api.ocr import MAX_IMAGE_BYTES, OCRServiceError, ocr_image
 from nutrition.local_translation import LocalTranslationError, translate_food_text
 from nutrition.usda_fdc import USDAFDCClient, USDAFDCError
@@ -127,6 +128,29 @@ class ManualIngredientInput(BaseModel):
     nutrients: SeasoningNutrients = Field(default_factory=SeasoningNutrients)
 
 
+class SyntheticProfileInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    synthetic_only: Literal[True]
+    name: str = Field(min_length=1, max_length=80)
+
+
+class SyntheticGoalInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    synthetic_only: Literal[True]
+    clinician_set: Literal[True]
+    nutrient: str = Field(min_length=1, max_length=80)
+    amount: Number = Field(ge=0)
+    unit: str = Field(min_length=1, max_length=32)
+    effective_on: date
+
+
+class SyntheticWeightInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    synthetic_only: Literal[True]
+    measured_on: date
+    kilograms: Positive
+
+
 def _demo_store():
     path = os.environ.get('KIDNEY_EXPERIMENTAL_DB')
     if not path:
@@ -190,6 +214,80 @@ _demo_store_lock = threading.Lock()
 # Experimental single-process cache: inode identity catches atomic replacements,
 # but not in-place resets; separate worker processes do not share this lock/cache.
 _demo_stores: dict[Path, tuple[tuple[int, int], SeasoningStore]] = {}
+_profile_stores: dict[Path, tuple[tuple[int, int], ProfileStore]] = {}
+
+
+def _profile_store():
+    _demo_store()  # Validate and initialize only the marked experimental database.
+    try:
+        target = Path(os.environ["KIDNEY_EXPERIMENTAL_DB"])
+        resolved = target.resolve()
+        with _demo_store_lock:
+            stat = resolved.stat()
+            identity = (stat.st_dev, stat.st_ino)
+            cached = _profile_stores.get(resolved)
+            if cached is None or cached[0] != identity:
+                store = ProfileStore(resolved)
+                _profile_stores[resolved] = ((resolved.stat().st_dev, resolved.stat().st_ino), store)
+            return _profile_stores[resolved][1]
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        raise HTTPException(status_code=503, detail='Experimental profile storage is unavailable') from exc
+
+
+@app.get('/experimental/profiles')
+def list_profiles():
+    return {'items': _profile_store().list_profiles(), 'synthetic_only': True}
+
+
+@app.post('/experimental/profiles')
+def create_profile(payload: SyntheticProfileInput):
+    try:
+        profile_id = _profile_store().create_profile(payload.name)
+        return {'id': profile_id, 'name': payload.name.strip(), 'synthetic_only': True}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail='Enter a profile name for synthetic data') from exc
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail='Profile storage is unavailable') from exc
+
+
+@app.get('/experimental/profiles/{profile_id}')
+def get_profile(profile_id: Annotated[int, Field(gt=0)]):
+    try:
+        profile = _profile_store().get_profile(profile_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail='Invalid profile') from exc
+    if profile is None:
+        raise HTTPException(status_code=404, detail='Profile not found')
+    return {**profile, 'synthetic_only': True, 'clinical_use': False}
+
+
+@app.post('/experimental/profiles/{profile_id}/goals')
+def add_profile_goal(profile_id: Annotated[int, Field(gt=0)], payload: SyntheticGoalInput):
+    store = _profile_store()
+    if store.get_profile(profile_id) is None:
+        raise HTTPException(status_code=404, detail='Profile not found')
+    try:
+        store.add_goal(profile_id, payload.nutrient, float(payload.amount), payload.unit,
+                       payload.effective_on.isoformat(), 'Synthetic clinician-set goal')
+        return {**store.get_profile(profile_id), 'synthetic_only': True, 'clinical_use': False}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail='Check the goal fields and try again') from exc
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail='Goal storage is unavailable') from exc
+
+
+@app.post('/experimental/profiles/{profile_id}/dry-weights')
+def add_profile_weight(profile_id: Annotated[int, Field(gt=0)], payload: SyntheticWeightInput):
+    store = _profile_store()
+    if store.get_profile(profile_id) is None:
+        raise HTTPException(status_code=404, detail='Profile not found')
+    try:
+        store.add_dry_weight(profile_id, payload.measured_on.isoformat(), float(payload.kilograms))
+        return {**store.get_profile(profile_id), 'synthetic_only': True, 'clinical_use': False}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail='Check the weight fields and try again') from exc
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail='Weight storage is unavailable') from exc
 
 
 @app.get("/experimental/usda/search")
