@@ -2,4 +2,4 @@
 
 Personal-use Thai renal nutrition planner for a caregiver. See [master plan](docs/MASTER_PLAN.md). This project is under development and is not ready for patient care.
 
-The initial calculator prototype uses Python's standard library. Run its tests with `python -m unittest discover -s tests -v`. Clinical validation, mobile UI, OCR, security, backup, and Windows setup are not complete.
+For development, create a Python virtual environment and install `requirements.txt`. Run tests with `python -m unittest discover -s tests -v`. Start the local-only API with `uvicorn api.main:app --host 127.0.0.1 --port 8000`; `/health` reports only that the process responds, not that the application is ready for use. Clinical validation, mobile UI, OCR, security, backup, and Windows setup are not complete. Do not enter real patient data.
