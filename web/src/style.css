@@ -41,8 +41,15 @@ p { margin: .4rem 0; }
 .ingredient-card, .portion-card, .results { position: relative; min-width: 0; margin: .75rem 0; padding: 1rem; border: 1px solid var(--line); border-radius: 1rem; background: #fff; box-shadow: 0 3px 12px #173d2b0a; }
 .usda-search { margin: 1rem 0; padding: 1rem; border: 1px solid var(--line); border-radius: 1rem; background: #fff; }
 .usda-search > p { color: var(--muted); font-size: .85rem; }
+.thai-query-suggestion { display: grid; gap: .1rem; margin: .55rem 0 .75rem; color: var(--green); font-size: .95rem; }
+.thai-query-suggestion strong { font-size: 1.1rem; }
+.thai-query-suggestion small { color: var(--muted); font-size: .85rem; }
+.thai-query-choice { justify-self: start; min-height: 2.75rem; padding: .45rem .75rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--surface); color: var(--green); font: inherit; font-weight: 750; cursor: pointer; }
+.thai-query-choice[aria-pressed="true"] { border-color: var(--green); background: #eaf4ee; }
+.thai-query-warning { color: #754c13 !important; font-size: .95rem !important; font-weight: 700; }
 .usda-results { list-style: none; padding: 0; margin: .5rem 0 0; }
 .usda-results li { display: grid; gap: .25rem; padding: .7rem 0; border-top: 1px solid var(--line); }
+.usda-food-state { color: var(--green); font-size: 1rem; font-weight: 800; }
 .usda-results small { color: var(--muted); }
 .ingredient-card { padding: 0; }
 .ingredient-summary { display: flex; flex-wrap: wrap; align-items: center; gap: .2rem .75rem; min-height: 3.25rem; padding: .75rem 6rem .75rem 1rem; color: var(--green); font-weight: 750; cursor: pointer; }
