@@ -29,7 +29,8 @@ type USDAIngredientPreview = {
   nutrients: Record<NutrientKey, string | null>; snapshot_digest: string;
 }
 const emptyValues = (): Ingredient['values'] => ({ energy_kcal: '', protein_g: '', sodium_mg: '', potassium_mg: '', phosphorus_mg: '' })
-const newIngredient = (): Ingredient => ({ name: '', amount: '', unit: 'g', state: 'raw', reference: '100', values: emptyValues(), source: 'manual', seasoningVersionId: null, ingredientVersionId: null, fdcId: null, fdcState: null })
+let ingredientRowSequence = 0
+const newIngredient = (): Ingredient => ({ rowId: `ingredient-row-${++ingredientRowSequence}`, name: '', amount: '', unit: 'g', state: 'raw', reference: '100', values: emptyValues(), source: 'manual', seasoningVersionId: null, ingredientVersionId: null, fdcId: null, fdcState: null })
 const stateNames: Record<FoodState, string> = { raw: 'ดิบ', cooked: 'สุก', as_sold: 'ตามสภาพที่ซื้อ' }
 const foodStateLabel = (state: FoodState | null) => state ? stateNames[state] : 'ระบบระบุสภาพดิบ/สุกไม่ได้ · ยังใช้คำนวณไม่ได้'
 const calculationErrorMessages: Record<string, string> = {
@@ -769,7 +770,7 @@ export function App() {
               {(!supportedSource || food.food_state === null) && <small className="usda-food-state" role="note">{!supportedSource ? 'ระบบนี้คำนวณได้เฉพาะ USDA Foundation / SR Legacy · ลองเลือกหมวดที่รองรับ หรือใช้วัตถุดิบที่บันทึกไว้' : 'ระบบไม่สามารถระบุจากรายการ USDA นี้ได้ว่าเป็นอาหารดิบหรือสุก จึงยังเลือกคำนวณไม่ได้ · ลองเลือกรายการที่ระบุการปรุงชัดเจน หรือใช้วัตถุดิบที่บันทึกไว้'}</small>}</li> })}</ul>
           </section>
           <section className="section-heading"><h2>รายการวัตถุดิบ</h2><button type="button" className="add-button" disabled={recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving === true} onClick={addIngredient}>＋ เพิ่มวัตถุดิบ</button></section>
-          {ingredients.map((item, index) => <div className="ingredient-card" key={index}>
+          {ingredients.map((item, index) => <div className="ingredient-card" key={item.rowId}>
             <details className="ingredient-details" data-ingredient-index={index} open={openIngredient === index}>
               <summary className="ingredient-summary" onClick={event => {
                 event.preventDefault()

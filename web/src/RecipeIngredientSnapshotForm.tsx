@@ -59,9 +59,11 @@ export function RecipeIngredientSnapshotForm({ ingredient, disabled, onBusyChang
       }
       onSaved(payload.version_id as number)
     } catch (cause) {
-      setError(cause instanceof Error && cause.message !== 'Failed to fetch'
-        ? cause.message
-        : 'เชื่อมต่อเพื่อบันทึกไม่ได้ · ข้อมูลในแถวยังอยู่ ลองตรวจการเชื่อมต่อแล้วบันทึกอีกครั้ง')
+      const responseMayBeMissing = cause instanceof TypeError || cause instanceof SyntaxError
+        || (cause instanceof Error && /failed to fetch|network/i.test(cause.message))
+      setError(responseMayBeMissing
+        ? 'ขาดการเชื่อมต่อหรือคำตอบจากเครื่องอ่านไม่ได้ · อาจบันทึกสำเร็จแล้ว ให้ค้นหารายการวัตถุดิบที่บันทึกไว้ก่อนส่งซ้ำ · แบบร่างยังอยู่'
+        : cause instanceof Error ? cause.message : 'บันทึกไม่สำเร็จ · แบบร่างยังอยู่ ตรวจรายการวัตถุดิบที่บันทึกไว้ก่อนลองอีกครั้ง')
     } finally {
       setBusy(false); onBusyChange(false)
     }
