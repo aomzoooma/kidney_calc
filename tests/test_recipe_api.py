@@ -82,6 +82,58 @@ class RecipeApiTest(unittest.TestCase):
         self.assertEqual(deleted.status_code, 204)
         self.assertEqual(self.client.get(f'/experimental/recipes/{recipe_id}').status_code, 404)
 
+    def test_recent_recipes_tracks_only_explicit_opens_and_points_to_current_recipe(self):
+        first = self.client.post('/experimental/recipes', json=self.recipe_payload()).json()['id']
+        second = self.client.post('/experimental/recipes', json={
+            **self.recipe_payload(), 'name': 'Second synthetic meal',
+        }).json()['id']
+        self.assertEqual(self.client.get('/experimental/recipes/recent').json()['items'], [])
+
+        self.assertEqual(self.client.post(f'/experimental/recipes/{first}/calculate', json={
+            'synthetic_only': True, 'portion': '0.5',
+        }).status_code, 200)
+        self.assertEqual(self.client.get('/experimental/recipes/recent').json()['items'], [])
+
+        opened = self.client.post(f'/experimental/recipes/{first}/open', json={'synthetic_only': True})
+        self.assertEqual(opened.status_code, 200)
+        self.assertEqual(opened.json()['recipe_id'], first)
+        self.assertEqual(opened.json()['history_type'], 'explicit_open')
+        self.assertTrue(opened.json()['recorded'])
+        self.client.patch(f'/experimental/recipes/{first}', json={
+            'synthetic_only': True, 'name': 'Current renamed meal', 'favorite': True,
+        })
+        self.client.post(f'/experimental/recipes/{second}/open', json={'synthetic_only': True})
+        self.client.post(f'/experimental/recipes/{first}/open', json={'synthetic_only': True})
+
+        recent = self.client.get('/experimental/recipes/recent').json()
+        self.assertEqual(recent['history_type'], 'explicit_open')
+        self.assertEqual([item['recipe_id'] for item in recent['items']], [first, second])
+        self.assertEqual(recent['items'][0]['name'], 'Current renamed meal')
+        self.assertTrue(recent['items'][0]['favorite'])
+        self.assertIn('opened_at', recent['items'][0])
+        self.assertTrue(recent['experimental'])
+        # New store instance reads same persistent DB; no browser/session identity is stored.
+        self.assertEqual(RecipeStore(Path(os.environ['KIDNEY_EXPERIMENTAL_DB']))
+                         .list_recent_recipes()[0]['recipe_id'], first)
+
+    def test_recent_recipes_missing_and_deleted_ids_are_safe(self):
+        recipe_id = self.client.post('/experimental/recipes', json=self.recipe_payload()).json()['id']
+        open_url = f'/experimental/recipes/{recipe_id}/open'
+        self.assertEqual(self.client.post(open_url).status_code, 422)
+        self.assertEqual(self.client.post(open_url, json={'synthetic_only': False}).status_code, 422)
+        self.assertEqual(self.client.post(open_url, json={
+            'synthetic_only': True, 'patient_id': 12,
+        }).status_code, 422)
+        self.assertEqual(self.client.get('/experimental/recipes/recent').json()['items'], [])
+        self.assertEqual(self.client.post('/experimental/recipes/999999/open',
+                                          json={'synthetic_only': True}).status_code, 404)
+        self.assertEqual(self.client.post('/experimental/recipes/0/open',
+                                          json={'synthetic_only': True}).status_code, 422)
+        self.assertEqual(self.client.post(open_url, json={'synthetic_only': True}).status_code, 200)
+        self.assertEqual(self.client.delete(f'/experimental/recipes/{recipe_id}',
+                                             params={'synthetic_only': 'true'}).status_code, 204)
+        self.assertEqual(self.client.get('/experimental/recipes/recent').json()['items'], [])
+
     def test_recipe_replacement_is_atomic_and_exact_versions_are_retained(self):
         recipe_id = self.client.post('/experimental/recipes', json=self.recipe_payload()).json()['id']
         replacement = {'synthetic_only': True, 'ingredients': [
