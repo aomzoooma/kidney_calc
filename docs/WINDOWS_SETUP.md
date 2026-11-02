@@ -46,6 +46,8 @@ To run the API for local development only:
 & $Python -m uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```
 
+USDA food search requires `USDA_FDC_API_KEY` in the same PowerShell window before starting the API. For a short trial, set USDA's shared `DEMO_KEY` (limited to 30 requests per IP per hour and 50 per day); for regular use, request a personal key from the [USDA FoodData Central API guide](https://fdc.nal.usda.gov/api-guide/). USDA may deactivate keys found in public repositories. Keep the key only in this PowerShell session: do not save it in a file, commit it, or share it in prompts or logs.
+
 The current `/health` route only confirms that the process responds. Do not bind to `0.0.0.0`, forward ports, or expose the API, Ollama, or database to a network. No authenticated patient routes or production setup have been implemented.
 
 ## Run the experimental calculator on this PC
@@ -59,6 +61,12 @@ Set-Location C:\work\kidney_calc
 $DemoDir = Join-Path $env:LOCALAPPDATA 'KidneyCalcDemo'
 New-Item -ItemType Directory -Force $DemoDir | Out-Null
 $env:KIDNEY_EXPERIMENTAL_DB = Join-Path $DemoDir 'synthetic-demo.sqlite3'
+$env:USDA_FDC_API_KEY = 'DEMO_KEY'
+# For a personal key instead, enter it at the hidden prompt:
+# $SecureKey = Read-Host 'USDA API key' -AsSecureString
+# $KeyPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureKey)
+# try { $env:USDA_FDC_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($KeyPointer) }
+# finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($KeyPointer); $SecureKey.Dispose(); Remove-Variable SecureKey, KeyPointer }
 .\.venv\Scripts\python.exe -m uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```
 
