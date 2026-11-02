@@ -40,6 +40,12 @@ p { margin: .4rem 0; }
 .add-button, .remove-button { border: 1px solid #b9d0c2; color: var(--green); background: #fff; border-radius: .7rem; padding: .45rem .75rem; font-weight: 700; }
 .ingredient-card, .portion-card, .results { position: relative; min-width: 0; margin: .75rem 0; padding: 1rem; border: 1px solid var(--line); border-radius: 1rem; background: #fff; box-shadow: 0 3px 12px #173d2b0a; }
 .usda-search { margin: 1rem 0; padding: 1rem; border: 1px solid var(--line); border-radius: 1rem; background: #fff; }
+.recipe-disclosure > summary, .ingredient-advanced > summary { min-height: 2.75rem; padding: .5rem .25rem; cursor: pointer; color: var(--green); font-weight: 750; }
+.recipe-disclosure > summary:focus-visible, .ingredient-advanced > summary:focus-visible { outline: 3px solid #66a989; outline-offset: 2px; }
+.recipe-disclosure[open] > summary { margin-bottom: .5rem; }
+.ingredient-advanced { margin: .65rem 0; }
+.recipe-snapshot-review { margin: .65rem 0 0; padding-top: .6rem; border-top: 1px solid var(--line); }
+.recipe-snapshot-review h3 { margin: 0; }
 .usda-search > p { color: var(--muted); font-size: .85rem; }
 .thai-query-suggestion { display: grid; gap: .1rem; margin: .55rem 0 .75rem; color: var(--green); font-size: .95rem; }
 .thai-query-suggestion strong { font-size: 1.1rem; }

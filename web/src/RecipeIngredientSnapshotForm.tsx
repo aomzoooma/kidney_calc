@@ -5,6 +5,7 @@ type Props = {
   ingredient: Ingredient
   disabled: boolean
   onBusyChange: (busy: boolean) => void
+  onErrorChange: (error: string) => void
   onSaved: (versionId: number) => void
 }
 
@@ -12,7 +13,7 @@ const stateNames: Record<Ingredient['state'], string> = {
   raw: 'ดิบ', cooked: 'สุก', as_sold: 'ตามสภาพที่ซื้อ',
 }
 
-export function RecipeIngredientSnapshotForm({ ingredient, disabled, onBusyChange, onSaved }: Props) {
+export function RecipeIngredientSnapshotForm({ ingredient, disabled, onBusyChange, onErrorChange, onSaved }: Props) {
   const [provider, setProvider] = useState('')
   const [sourceVersion, setSourceVersion] = useState('')
   const [sourceDate, setSourceDate] = useState('')
@@ -20,7 +21,6 @@ export function RecipeIngredientSnapshotForm({ ingredient, disabled, onBusyChang
   const [provenance, setProvenance] = useState('')
   const [reviewed, setReviewed] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
 
   useEffect(() => { setReviewed(false) }, [ingredient])
 
@@ -35,7 +35,7 @@ export function RecipeIngredientSnapshotForm({ ingredient, disabled, onBusyChang
 
   async function save() {
     if (!canSave) return
-    setBusy(true); setError(''); onBusyChange(true)
+    setBusy(true); onErrorChange(''); onBusyChange(true)
     try {
       const response = await fetch('/experimental/ingredients', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -61,15 +61,16 @@ export function RecipeIngredientSnapshotForm({ ingredient, disabled, onBusyChang
     } catch (cause) {
       const responseMayBeMissing = cause instanceof TypeError || cause instanceof SyntaxError
         || (cause instanceof Error && /failed to fetch|network/i.test(cause.message))
-      setError(responseMayBeMissing
+      const message = responseMayBeMissing
         ? 'ขาดการเชื่อมต่อหรือคำตอบจากเครื่องอ่านไม่ได้ · อาจบันทึกสำเร็จแล้ว ให้ค้นหารายการวัตถุดิบที่บันทึกไว้ก่อนส่งซ้ำ · แบบร่างยังอยู่'
-        : cause instanceof Error ? cause.message : 'บันทึกไม่สำเร็จ · แบบร่างยังอยู่ ตรวจรายการวัตถุดิบที่บันทึกไว้ก่อนลองอีกครั้ง')
+        : cause instanceof Error ? cause.message : 'บันทึกไม่สำเร็จ · แบบร่างยังอยู่ ตรวจรายการวัตถุดิบที่บันทึกไว้ก่อนลองอีกครั้ง'
+      onErrorChange(message)
     } finally {
       setBusy(false); onBusyChange(false)
     }
   }
 
-  return <section className="usda-search recipe-snapshot-review" aria-label={`ตรวจข้อมูลวัตถุดิบ ${ingredient.name || 'ที่กรอกเอง'} ก่อนบันทึก`}>
+  return <section className="recipe-snapshot-review" aria-label={`ตรวจข้อมูลวัตถุดิบ ${ingredient.name || 'ที่กรอกเอง'} ก่อนบันทึก`}>
     <h3>บันทึกข้อมูลวัตถุดิบนี้ในเครื่อง</h3>
     <p>ตรวจข้อมูลในแถว แล้วระบุแหล่งที่มาของค่าที่กรอกเอง · บันทึกเป็นรุ่นอ้างอิงคงที่ · ช่องสารอาหารที่เว้นว่างยังเป็น “ไม่ทราบ”</p>
     <div className="thai-query-suggestion" role="note">
@@ -99,6 +100,5 @@ export function RecipeIngredientSnapshotForm({ ingredient, disabled, onBusyChang
       <label className="attestation"><input type="checkbox" checked={reviewed} onChange={event => setReviewed(event.target.checked)} /> ยืนยันว่าเป็นข้อมูลสมมติ ตรวจชื่อ แหล่งอ้างอิง ฐาน สภาพ และสารอาหารแล้ว</label>
       <button className="add-button" type="button" disabled={!canSave} onClick={() => void save()}>{busy ? 'กำลังบันทึกรุ่น…' : 'ตรวจแล้ว · บันทึกวัตถุดิบในเครื่อง'}</button>
     </fieldset>
-    {error && <p className="error" role="alert">{error}</p>}
   </section>
 }
