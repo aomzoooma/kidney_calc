@@ -94,7 +94,7 @@ class RecipeApiTest(unittest.TestCase):
         }).status_code, 200)
         self.assertEqual(self.client.get('/experimental/recipes/recent').json()['items'], [])
 
-        opened = self.client.post(f'/experimental/recipes/{first}/open')
+        opened = self.client.post(f'/experimental/recipes/{first}/open', json={'synthetic_only': True})
         self.assertEqual(opened.status_code, 200)
         self.assertEqual(opened.json()['recipe_id'], first)
         self.assertEqual(opened.json()['history_type'], 'explicit_open')
@@ -102,8 +102,8 @@ class RecipeApiTest(unittest.TestCase):
         self.client.patch(f'/experimental/recipes/{first}', json={
             'synthetic_only': True, 'name': 'Current renamed meal', 'favorite': True,
         })
-        self.client.post(f'/experimental/recipes/{second}/open')
-        self.client.post(f'/experimental/recipes/{first}/open')
+        self.client.post(f'/experimental/recipes/{second}/open', json={'synthetic_only': True})
+        self.client.post(f'/experimental/recipes/{first}/open', json={'synthetic_only': True})
 
         recent = self.client.get('/experimental/recipes/recent').json()
         self.assertEqual(recent['history_type'], 'explicit_open')
@@ -118,9 +118,18 @@ class RecipeApiTest(unittest.TestCase):
 
     def test_recent_recipes_missing_and_deleted_ids_are_safe(self):
         recipe_id = self.client.post('/experimental/recipes', json=self.recipe_payload()).json()['id']
-        self.assertEqual(self.client.post('/experimental/recipes/999999/open').status_code, 404)
-        self.assertEqual(self.client.post('/experimental/recipes/0/open').status_code, 422)
-        self.assertEqual(self.client.post(f'/experimental/recipes/{recipe_id}/open').status_code, 200)
+        open_url = f'/experimental/recipes/{recipe_id}/open'
+        self.assertEqual(self.client.post(open_url).status_code, 422)
+        self.assertEqual(self.client.post(open_url, json={'synthetic_only': False}).status_code, 422)
+        self.assertEqual(self.client.post(open_url, json={
+            'synthetic_only': True, 'patient_id': 12,
+        }).status_code, 422)
+        self.assertEqual(self.client.get('/experimental/recipes/recent').json()['items'], [])
+        self.assertEqual(self.client.post('/experimental/recipes/999999/open',
+                                          json={'synthetic_only': True}).status_code, 404)
+        self.assertEqual(self.client.post('/experimental/recipes/0/open',
+                                          json={'synthetic_only': True}).status_code, 422)
+        self.assertEqual(self.client.post(open_url, json={'synthetic_only': True}).status_code, 200)
         self.assertEqual(self.client.delete(f'/experimental/recipes/{recipe_id}',
                                              params={'synthetic_only': 'true'}).status_code, 204)
         self.assertEqual(self.client.get('/experimental/recipes/recent').json()['items'], [])

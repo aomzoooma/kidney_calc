@@ -125,6 +125,12 @@ class SavedRecipeCalculationInput(BaseModel):
     portion: Portion
 
 
+class SavedRecipeOpenInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    synthetic_only: Literal[True]
+
+
 class OCRInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -765,7 +771,8 @@ def list_recent_saved_recipes():
 
 
 @app.post("/experimental/recipes/{recipe_id}/open")
-def record_saved_recipe_open(recipe_id: Annotated[int, Field(gt=0)]):
+def record_saved_recipe_open(recipe_id: Annotated[int, Field(gt=0)], payload: SavedRecipeOpenInput):
+    """Record an explicit open in the synthetic store; item points to current recipe, no patient data."""
     try:
         opened = _recipe_store().record_recipe_open(recipe_id)
         return {**opened, "recorded": True, "history_type": "explicit_open",
