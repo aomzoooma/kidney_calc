@@ -60,6 +60,14 @@ class IngredientStoreTest(unittest.TestCase):
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (version_id, ingredient_id, "1", "P", "V", "2026-01-01", "ref", "manual", "100", "g", "raw", 0),
                 )
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "immutable"):
+                db.execute(
+                    "INSERT OR REPLACE INTO ingredient_versions "
+                    "(id, ingredient_id, version, provider, source_version, retrieved_on, "
+                    "source_reference, provenance, basis_quantity, basis_unit, food_state, reviewed) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (version_id + 99, ingredient_id, "1", "P", "V", "2026-01-01", "ref", "manual", "100", "g", "raw", 0),
+                )
         with self.assertRaises(sqlite3.IntegrityError):
             self.add(ingredient_id, "1", {})
         self.add(ingredient_id, "2", {})
