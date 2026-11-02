@@ -755,6 +755,29 @@ def list_saved_recipes():
         raise HTTPException(status_code=503, detail='Recipe storage is unavailable') from exc
 
 
+@app.get("/experimental/recipes/recent")
+def list_recent_saved_recipes():
+    try:
+        return {"items": _recipe_store().list_recent_recipes(), "history_type": "explicit_open",
+                "experimental": True, "clinical_use": False}
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail='Recipe storage is unavailable') from exc
+
+
+@app.post("/experimental/recipes/{recipe_id}/open")
+def record_saved_recipe_open(recipe_id: Annotated[int, Field(gt=0)]):
+    try:
+        opened = _recipe_store().record_recipe_open(recipe_id)
+        return {**opened, "recorded": True, "history_type": "explicit_open",
+                "experimental": True, "clinical_use": False}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail='Recipe not found') from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail='Invalid recipe ID') from exc
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail='Recipe storage is unavailable') from exc
+
+
 @app.get("/experimental/recipes/{recipe_id}")
 def get_saved_recipe(recipe_id: int):
     try:

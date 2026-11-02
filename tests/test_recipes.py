@@ -106,6 +106,26 @@ class RecipeStoreTest(unittest.TestCase):
             with self.subTest(operation=operation), self.assertRaises(ValueError):
                 operation()
 
+    def test_recent_opens_are_atomic_current_and_bounded(self):
+        recipe_ids = [self.recipes.create_recipe(
+            f"Synthetic meal {index}", [(self.version_ids[0], Decimal("10"), "g", "raw")]
+        ) for index in range(12)]
+        for recipe_id in recipe_ids:
+            self.recipes.record_recipe_open(recipe_id)
+        self.recipes.record_recipe_open(recipe_ids[0])
+        self.assertEqual([item["recipe_id"] for item in self.recipes.list_recent_recipes()],
+                         [recipe_ids[0], *reversed(recipe_ids[-9:])])
+        with self.assertRaises(LookupError):
+            self.recipes.record_recipe_open(99999)
+        self.assertEqual(self.recipes.list_recent_recipes()[0]["recipe_id"], recipe_ids[0])
+        with self.assertRaises(ValueError):
+            self.recipes.list_recent_recipes(True)
+        self.recipes.update_recipe(recipe_ids[0], name="Current name", favorite=True)
+        self.assertEqual(self.recipes.list_recent_recipes()[0]["name"], "Current name")
+        self.assertTrue(self.recipes.list_recent_recipes()[0]["favorite"])
+        self.recipes.delete_recipe(recipe_ids[0])
+        self.assertNotIn(recipe_ids[0], [item["recipe_id"] for item in self.recipes.list_recent_recipes()])
+
 
 if __name__ == "__main__":
     unittest.main()

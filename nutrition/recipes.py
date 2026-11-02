@@ -56,6 +56,11 @@ class RecipeStore:
                     food_state TEXT NOT NULL CHECK(food_state IN ('raw', 'cooked', 'as_sold')),
                     PRIMARY KEY(recipe_id, position)
                 );
+                CREATE TABLE IF NOT EXISTS recent_recipe_opens (
+                    open_order INTEGER PRIMARY KEY AUTOINCREMENT,
+                    recipe_id INTEGER NOT NULL UNIQUE REFERENCES recipes(id) ON DELETE CASCADE,
+                    opened_at TEXT NOT NULL
+                );
             """)
 
     @contextmanager
@@ -149,6 +154,36 @@ class RecipeStore:
             rows = db.execute("SELECT id, name, favorite FROM recipes ORDER BY id").fetchall()
             return [{"id": row["id"], "name": row["name"],
                      "favorite": bool(row["favorite"])} for row in rows]
+
+    def record_recipe_open(self, recipe_id: int) -> dict:
+        """Record an explicit open; this points to the current saved recipe, not a snapshot."""
+        recipe_id = _recipe_id(recipe_id)
+        with self._connect() as db:
+            db.execute("DELETE FROM recent_recipe_opens WHERE recipe_id = ?", (recipe_id,))
+            cursor = db.execute(
+                """INSERT INTO recent_recipe_opens(recipe_id, opened_at)
+                   SELECT id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now') FROM recipes WHERE id = ?""",
+                (recipe_id,),
+            )
+            if cursor.rowcount == 0:
+                raise LookupError("recipe not found")
+            row = db.execute(
+                "SELECT recipe_id, opened_at FROM recent_recipe_opens WHERE recipe_id = ?",
+                (recipe_id,),
+            ).fetchone()
+            return dict(row)
+
+    def list_recent_recipes(self, limit: int = 10) -> list[dict]:
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+            raise ValueError("limit must be an integer from 1 to 50")
+        with self._connect() as db:
+            rows = db.execute(
+                """SELECT r.id AS recipe_id, r.name, r.favorite, o.opened_at
+                   FROM recent_recipe_opens o JOIN recipes r ON r.id = o.recipe_id
+                   ORDER BY o.open_order DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+            return [{**dict(row), "favorite": bool(row["favorite"])} for row in rows]
 
     def delete_recipe(self, recipe_id: int):
         recipe_id = _recipe_id(recipe_id)
