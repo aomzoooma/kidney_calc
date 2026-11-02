@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { App } from '../src/main'
 
@@ -126,7 +126,7 @@ describe('manual recipe UI', () => {
     expect(cookedRecord.querySelector('small')?.textContent).toContain('USDA FDC')
 
     const cookedResult = cookedName.closest('li')!
-    fireEvent.click(cookedResult.querySelector('button')!)
+    fireEvent.click(within(cookedResult).getByRole('button', { name: 'เพิ่มเป็นรายการใหม่' }))
     fireEvent.change(document.querySelector<HTMLInputElement>('[data-ingredient-index="1"] input[type="number"]')!, { target: { value: '500' } })
     expect(document.querySelector('[data-ingredient-index="1"] summary')?.textContent).toContain('Chicken breast, cooked')
     expect(document.querySelector('[data-ingredient-index="1"] summary')?.textContent).toContain('500 กรัม')
@@ -175,6 +175,151 @@ describe('manual recipe UI', () => {
     fireEvent.change(screen.getByLabelText('ชื่ออาหารหรือคำค้นภาษาไทยหรืออังกฤษ'), { target: { value: 'หมู' } })
     expect(screen.getByText(/ลองระบุชนิดหรือส่วนอาหารให้ชัดขึ้น/)).toBeTruthy()
     expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/experimental/usda/search'))).toHaveLength(1)
+  })
+
+  it('previews local query translation and requires explicit USDA search acceptance', async () => {
+    const translationRequests: Array<Record<string, unknown>> = []
+    const foods = [{ fdc_id: 301, description: 'Chicken breast, raw', source_type: 'Foundation', source_version: 'test-v1', food_state: 'raw' }]
+    const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/experimental/local-food-translation') {
+        const body = JSON.parse(String(options?.body)) as Record<string, unknown>
+        translationRequests.push(body)
+        return { ok: true, json: async () => ({ translation: body.target_language === 'en' ? 'chicken breast' : 'อกไก่' }) }
+      }
+      if (url.startsWith('/experimental/usda/search')) return { ok: true, json: async () => ({ items: foods }) }
+      if (url === '/experimental/recipes/calculate') return { ok: true, json: async () => response }
+      return { ok: true, json: async () => ({ items: [] }) }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getByLabelText('ชื่อวัตถุดิบ'), { target: { value: 'Test item' } })
+    fireEvent.change(screen.getAllByLabelText(/ปริมาณที่ใช้/)[0], { target: { value: '100' } })
+    const query = screen.getByLabelText('ชื่ออาหารหรือคำค้นภาษาไทยหรืออังกฤษ')
+    fireEvent.change(query, { target: { value: 'อกไก่' } })
+    fireEvent.click(screen.getByRole('button', { name: 'แปลคำค้นไทยเป็นอังกฤษผ่าน Ollama' }))
+    await screen.findByText('chicken breast')
+    expect(translationRequests).toEqual([{ text: 'อกไก่', target_language: 'en' }])
+    expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/experimental/usda/search'))).toBe(false)
+    expect((query as HTMLInputElement).value).toBe('อกไก่')
+
+    fireEvent.click(screen.getByRole('button', { name: 'ค้นหา USDA ด้วยคำแปลนี้' }))
+    await screen.findByText('Chicken breast, raw')
+    expect(new URL(String(fetchMock.mock.calls.find(([url]) => String(url).startsWith('/experimental/usda/search'))?.[0]), window.location.origin).searchParams.get('q')).toBe('chicken breast')
+
+    fireEvent.click(screen.getByRole('button', { name: 'แปลชื่อ USDA เป็นไทยผ่าน Ollama' }))
+    await screen.findByText('อกไก่')
+    const exactResult = screen.getByText('Chicken breast, raw').closest('li')!
+    expect(exactResult.querySelector('.usda-food-state')?.textContent).toContain('สภาพอาหาร: ดิบ')
+    expect(exactResult.querySelector('small')?.textContent).toContain('USDA FDC')
+    expect(exactResult.textContent).toContain('อกไก่')
+    fireEvent.click(exactResult.querySelector('button.add-button:last-child')!)
+    expect(document.querySelector('[data-ingredient-index="1"] summary')?.textContent).toContain('Chicken breast, raw')
+    expect(document.querySelector('[data-ingredient-index="1"] summary')?.textContent).not.toContain('อกไก่')
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-ingredient-index="1"] input[type="number"]')!, { target: { value: '500' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /ยืนยันว่ากำลังทดสอบ/ }))
+    expect(Array.from(document.querySelectorAll(':invalid')).map(item => [item.outerHTML, (item as HTMLInputElement).value])).toEqual([])
+    fireEvent.click(screen.getByRole('button', { name: 'คำนวณสารอาหาร' }))
+    const calculation = fetchMock.mock.calls.find(([url]) => url === '/experimental/recipes/calculate')
+    const payload = JSON.parse(String(calculation?.[1]?.body))
+    expect(payload.ingredients[1]).toMatchObject({ source_type: 'usda', fdc_id: 301, food_state: 'raw', amount: '500' })
+    expect(payload.ingredients[1]).not.toHaveProperty('description_translation')
+  })
+
+  it('ignores a failed query translation after the search text changes', async () => {
+    let resolveTranslation!: (value: { ok: boolean; json: () => Promise<{ detail?: string }> }) => void
+    const fetchMock = vi.fn((url: string) => url === '/experimental/local-food-translation'
+      ? new Promise<{ ok: boolean; json: () => Promise<{ detail?: string }> }>(resolve => { resolveTranslation = resolve })
+      : Promise.resolve({ ok: true, json: async () => ({ items: [] }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    const query = screen.getByLabelText('ชื่ออาหารหรือคำค้นภาษาไทยหรืออังกฤษ')
+    fireEvent.change(query, { target: { value: 'อกไก่' } })
+    fireEvent.click(screen.getByRole('button', { name: 'แปลคำค้นไทยเป็นอังกฤษผ่าน Ollama' }))
+    fireEvent.change(query, { target: { value: 'สะโพกไก่' } })
+    await act(async () => resolveTranslation({ ok: false, json: async () => ({ detail: 'local error' }) }))
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect((query as HTMLInputElement).value).toBe('สะโพกไก่')
+    expect(screen.getByRole('button', { name: 'ค้นหา USDA ด้วยคำแนะนำ' })).toBeTruthy()
+  })
+
+  it('keeps the dictionary search available when local translation fails', async () => {
+    const fetchMock = vi.fn(async (url: string) => url === '/experimental/local-food-translation'
+      ? { ok: false, json: async () => ({ detail: 'local model unavailable' }) }
+      : url.startsWith('/experimental/usda/search')
+        ? { ok: true, json: async () => ({ items: [] }) }
+        : { ok: true, json: async () => ({ items: [] }) })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getByLabelText('ชื่ออาหารหรือคำค้นภาษาไทยหรืออังกฤษ'), { target: { value: 'อกไก่' } })
+    fireEvent.click(screen.getByRole('button', { name: 'แปลคำค้นไทยเป็นอังกฤษผ่าน Ollama' }))
+    await screen.findByRole('alert')
+    fireEvent.click(screen.getByRole('button', { name: 'ค้นหา USDA ด้วยคำแนะนำ' }))
+    const searchCall = fetchMock.mock.calls.find(([url]) => String(url).startsWith('/experimental/usda/search'))
+    expect(new URL(String(searchCall?.[0]), window.location.origin).searchParams.get('q')).toBe('chicken breast')
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('ignores a failed result translation after its USDA result is cleared', async () => {
+    let resolveTranslation!: (value: { ok: boolean; json: () => Promise<{ detail?: string }> }) => void
+    const fetchMock = vi.fn((url: string) => url === '/experimental/local-food-translation'
+      ? new Promise<{ ok: boolean; json: () => Promise<{ detail?: string }> }>(resolve => { resolveTranslation = resolve })
+      : url.startsWith('/experimental/usda/search')
+        ? Promise.resolve({ ok: true, json: async () => ({ items: [{ fdc_id: 401, description: 'Chicken breast, raw', source_type: 'Foundation', source_version: 'test', food_state: 'raw' }] }) })
+        : Promise.resolve({ ok: true, json: async () => ({ items: [] }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    const query = screen.getByLabelText('ชื่ออาหารหรือคำค้นภาษาไทยหรืออังกฤษ')
+    fireEvent.change(query, { target: { value: 'chicken breast' } })
+    fireEvent.click(screen.getByRole('button', { name: 'ค้นหา USDA' }))
+    await screen.findByText('Chicken breast, raw')
+    fireEvent.click(screen.getByRole('button', { name: 'แปลชื่อ USDA เป็นไทยผ่าน Ollama' }))
+    fireEvent.change(query, { target: { value: 'brown rice' } })
+    await act(async () => resolveTranslation({ ok: false, json: async () => ({ detail: 'local error' }) }))
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.queryByText('Chicken breast, raw')).toBeNull()
+    expect((query as HTMLInputElement).value).toBe('brown rice')
+  })
+
+  it('translates one USDA result at a time', async () => {
+    let resolveTranslation!: (value: { ok: boolean; json: () => Promise<{ translation: string }> }) => void
+    let translationCalls = 0
+    const fetchMock = vi.fn((url: string) => url === '/experimental/local-food-translation'
+      ? (++translationCalls, new Promise<{ ok: boolean; json: () => Promise<{ translation: string }> }>(resolve => { resolveTranslation = resolve }))
+      : url.startsWith('/experimental/usda/search')
+        ? Promise.resolve({ ok: true, json: async () => ({ items: [
+          { fdc_id: 501, description: 'Chicken breast, raw', source_type: 'Foundation', source_version: 'test', food_state: 'raw' },
+          { fdc_id: 502, description: 'Chicken thigh, raw', source_type: 'Foundation', source_version: 'test', food_state: 'raw' },
+        ] }) })
+        : Promise.resolve({ ok: true, json: async () => ({ items: [] }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getByLabelText('ชื่ออาหารหรือคำค้นภาษาไทยหรืออังกฤษ'), { target: { value: 'chicken' } })
+    fireEvent.click(screen.getByRole('button', { name: 'ค้นหา USDA' }))
+    await screen.findByText('Chicken thigh, raw')
+    fireEvent.click(screen.getAllByRole('button', { name: 'แปลชื่อ USDA เป็นไทยผ่าน Ollama' })[0])
+    expect((screen.getAllByRole('button', { name: 'แปลชื่อ USDA เป็นไทยผ่าน Ollama' })[0] as HTMLButtonElement).disabled).toBe(true)
+    expect(translationCalls).toBe(1)
+    await act(async () => resolveTranslation({ ok: true, json: async () => ({ translation: 'อกไก่ดิบ' }) }))
+    await screen.findByText('อกไก่ดิบ')
+  })
+
+  it('keeps translated USDA queries within the 200-character search limit', async () => {
+    const fetchMock = vi.fn(async (url: string) => url === '/experimental/local-food-translation'
+      ? { ok: true, json: async () => ({ translation: 'x'.repeat(201) }) }
+      : { ok: true, json: async () => ({ items: [] }) })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getByLabelText('ชื่ออาหารหรือคำค้นภาษาไทยหรืออังกฤษ'), { target: { value: 'เนื้อสัตว์ชื่อยาว' } })
+    fireEvent.click(screen.getByRole('button', { name: 'แปลคำค้นไทยเป็นอังกฤษผ่าน Ollama' }))
+    expect(await screen.findByText(/คำแปลเกินขีดจำกัด USDA 200 ตัวอักษร/)).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'ค้นหา USDA ด้วยคำแปลนี้' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/experimental/usda/search'))).toBe(false)
   })
 
   it('discards a delayed USDA response after changing the selected Thai cut', async () => {

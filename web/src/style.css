@@ -44,6 +44,8 @@ p { margin: .4rem 0; }
 .thai-query-suggestion { display: grid; gap: .1rem; margin: .55rem 0 .75rem; color: var(--green); font-size: .95rem; }
 .thai-query-suggestion strong { font-size: 1.1rem; }
 .thai-query-suggestion small { color: var(--muted); font-size: .85rem; }
+.local-translation-note { color: var(--muted); font-size: .9rem; }
+.thai-query-suggestion .thai-query-choice { margin-top: .35rem; }
 .thai-query-choice { justify-self: start; min-height: 2.75rem; padding: .45rem .75rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--surface); color: var(--green); font: inherit; font-weight: 750; cursor: pointer; }
 .thai-query-choice[aria-pressed="true"] { border-color: var(--green); background: #eaf4ee; }
 .thai-query-warning { color: #754c13 !important; font-size: .95rem !important; font-weight: 700; }
