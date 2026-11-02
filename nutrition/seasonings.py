@@ -28,7 +28,9 @@ class SeasoningStore:
         if reviewed is not True:
             raise ValueError('User review is required')
         name = _text(name, 'name')
-        brand = _text(brand, 'brand')
+        if brand is not None and not isinstance(brand, str):
+            raise ValueError('brand must be text or None')
+        brand = brand.strip() if brand else ''
         retrieved_on = _day(retrieved_on, 'retrieved_on')
         source_reference = _text(source_reference, 'source_reference')
         basis = _decimal(basis_quantity, 'basis_quantity', positive=True)
@@ -46,7 +48,7 @@ class SeasoningStore:
                 (ingredient_id, version, provider, source_version, retrieved_on, source_reference,
                  provenance, basis_quantity, basis_unit, food_state, reviewed, {columns})
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {placeholders})''',
-                (ingredient_id, '1', brand, 'user-reviewed label', retrieved_on, source_reference,
+                (ingredient_id, '1', brand or 'user-entered', 'user-reviewed label', retrieved_on, source_reference,
                  'user-entered label', basis, basis_unit, 'as_sold', 1, *values)).lastrowid
         return {'ingredient_id': ingredient_id, 'version_id': version_id}
 
@@ -58,6 +60,7 @@ class SeasoningStore:
                 v.potassium_mg, v.phosphorus_mg FROM ingredients i
                 JOIN seasoning_brands b ON b.ingredient_id = i.id
                 JOIN ingredient_versions v ON v.ingredient_id = i.id ORDER BY i.name, v.id''').fetchall()
-        return [{**{key: row[key] for key in ('ingredient_id', 'version_id', 'name', 'brand', 'basis_quantity', 'basis_unit', 'provenance', 'source_reference', 'retrieved_on')},
+        return [{**{key: row[key] for key in ('ingredient_id', 'version_id', 'name', 'basis_quantity', 'basis_unit', 'provenance', 'source_reference', 'retrieved_on')},
+                 'brand': row['brand'] or None,
                  'reviewed': bool(row['reviewed']),
                  'nutrients': {key: row[key] for key in NUTRIENTS}} for row in rows]
