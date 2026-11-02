@@ -26,8 +26,33 @@ afterEach(() => {
 const openRecipes = () => fireEvent.click(screen.getByRole('link', { name: 'สูตรอาหาร' }))
 
 describe('manual recipe UI', () => {
+  it('selects a saved seasoning version with its stored basis and measure', async () => {
+    const fetchMock = vi.fn(async (url: string, options?: RequestInit) => url === '/experimental/seasonings'
+      ? { ok: true, json: async () => ({ items: [{ version_id: 42, name: 'Test seasoning', brand: null,
+          basis_quantity: '15', basis_unit: 'ml', reviewed: true,
+          nutrients: { energy_kcal: null, protein_g: null, sodium_mg: '0', potassium_mg: null, phosphorus_mg: null } }] }) }
+      : { ok: true, json: async () => response })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    await screen.findByRole('option', { name: /Test seasoning/ })
+    fireEvent.change(screen.getAllByLabelText(/เลือกเครื่องปรุงที่บันทึกไว้/)[0], { target: { value: '42' } })
+    expect((screen.getAllByLabelText(/หน่วยปริมาณ/)[0] as HTMLSelectElement).value).toBe('ml')
+    expect((screen.getAllByLabelText(/สภาพอาหาร/)[0] as HTMLSelectElement).value).toBe('as_sold')
+    expect((screen.getAllByLabelText(/ข้อมูลสารอาหารต่อ/)[0] as HTMLInputElement).value).toBe('15')
+    fireEvent.change(screen.getAllByLabelText(/ปริมาณที่ใช้/)[0], { target: { value: '30' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /ยืนยันว่าข้อมูลทั้งหมด/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'คำนวณสารอาหาร' }))
+    await screen.findByText('สารอาหารโดยประมาณ · 1 ส่วน')
+    const calculation = fetchMock.mock.calls.find(([url]) => url === '/experimental/recipes/calculate')
+    const body = JSON.parse(String(calculation?.[1]?.body))
+    expect(body.ingredients[0].seasoning_version_id).toBe(42)
+    expect(body.ingredients[0]).toMatchObject({ unit: 'ml', food_state: 'as_sold', reference_quantity: '15' })
+    expect(body.ingredients[0].sodium_mg).toBe('0')
+  })
+
   it('requires synthetic-only confirmation', () => {
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ items: [] }) }))
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
     openRecipes()

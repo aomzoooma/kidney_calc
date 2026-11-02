@@ -31,6 +31,41 @@ class SeasoningApiTest(unittest.TestCase):
         self.assertIsNone(item['nutrients']['protein_g'])
         self.assertTrue(item['reviewed'])
 
+    def test_recipe_reuses_exact_saved_version_from_server(self):
+        saved = self.client.post('/experimental/seasonings', json=self.payload).json()
+        positive = self.client.post('/experimental/seasonings', json={
+            **self.payload, 'name': 'อีกตัวอย่าง', 'nutrients': {'sodium_mg': '5', 'protein_g': None},
+        }).json()
+        ingredient = {
+            'amount': '30', 'unit': 'ml', 'food_state': 'as_sold',
+            'reference_quantity': '1', 'reference_unit': 'ml', 'reference_food_state': 'as_sold',
+            'seasoning_version_id': saved['version_id'],
+            'sodium_mg': '999999', 'protein_g': '999999',
+        }
+        result = self.client.post('/experimental/recipes/calculate', json={
+            'synthetic_only': True, 'portion': '1', 'ingredients': [
+                ingredient, {**ingredient, 'seasoning_version_id': positive['version_id']},
+            ],
+        })
+        self.assertEqual(result.status_code, 200)
+        totals = result.json()['totals']
+        self.assertEqual(totals['sodium_mg'], {'value': '10', 'complete': True})
+        self.assertEqual(totals['protein_g'], {'value': None, 'complete': False})
+
+    def test_recipe_rejects_unknown_version_and_basis_mismatch(self):
+        saved = self.client.post('/experimental/seasonings', json=self.payload).json()
+        base = {
+            'amount': '15', 'unit': 'ml', 'food_state': 'as_sold',
+            'reference_quantity': '15', 'reference_unit': 'ml', 'reference_food_state': 'as_sold',
+            'seasoning_version_id': saved['version_id'],
+        }
+        recipe = {'synthetic_only': True, 'portion': '1', 'ingredients': [base]}
+        self.assertEqual(self.client.post('/experimental/recipes/calculate', json=recipe).status_code, 200)
+        recipe['ingredients'] = [{**base, 'seasoning_version_id': 999999}]
+        self.assertEqual(self.client.post('/experimental/recipes/calculate', json=recipe).status_code, 422)
+        recipe['ingredients'] = [{**base, 'unit': 'g'}]
+        self.assertEqual(self.client.post('/experimental/recipes/calculate', json=recipe).status_code, 422)
+
     def test_rejects_unreviewed_real_or_invalid_data(self):
         for change in ({'reviewed': False}, {'synthetic_only': False}, {'basis_quantity': '0'}):
             self.assertEqual(self.client.post('/experimental/seasonings', json={**self.payload, **change}).status_code, 422)

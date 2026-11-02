@@ -64,3 +64,25 @@ class SeasoningStore:
                  'brand': row['brand'] or None,
                  'reviewed': bool(row['reviewed']),
                  'nutrients': {key: row[key] for key in NUTRIENTS}} for row in rows]
+
+    def get_reviewed_version(self, version_id):
+        """Resolve exact immutable seasoning version; return authoritative Decimal values."""
+        if isinstance(version_id, bool) or not isinstance(version_id, int) or version_id <= 0:
+            raise ValueError('version_id must be a positive integer')
+        with self.ingredients._connect() as db:
+            row = db.execute('''SELECT i.id AS ingredient_id, v.id AS version_id, i.name,
+                v.basis_quantity, v.basis_unit, v.food_state, v.reviewed,
+                v.energy_kcal, v.protein_g, v.sodium_mg, v.potassium_mg, v.phosphorus_mg
+                FROM ingredients i JOIN seasoning_brands b ON b.ingredient_id = i.id
+                JOIN ingredient_versions v ON v.ingredient_id = i.id
+                WHERE v.id = ? AND v.reviewed = 1''', (version_id,)).fetchone()
+        if row is None:
+            return None
+        return {
+            'ingredient_id': row['ingredient_id'], 'version_id': row['version_id'],
+            'name': row['name'], 'basis_quantity': Decimal(str(row['basis_quantity'])),
+            'basis_unit': row['basis_unit'], 'food_state': row['food_state'],
+            'reviewed': bool(row['reviewed']),
+            'nutrients': {key: Decimal(str(row[key])) if row[key] is not None else None
+                          for key in NUTRIENTS},
+        }

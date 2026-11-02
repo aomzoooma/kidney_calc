@@ -1,6 +1,6 @@
 import { StrictMode, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { buildCalculationPayload, isCurrentRevision, nutrients, type FoodState, type Ingredient, type NutrientKey } from './request'
+import { buildCalculationPayload, isCurrentRevision, nutrients, type FoodState, type Ingredient, type NutrientKey, type SavedSeasoning } from './request'
 import { OcrPreview } from './OcrPreview'
 import './style.css'
 
@@ -9,7 +9,7 @@ type Result = {
   totals: Record<NutrientKey, { value: string | null; complete: boolean }>
 }
 const emptyValues = (): Ingredient['values'] => ({ energy_kcal: '', protein_g: '', sodium_mg: '', potassium_mg: '', phosphorus_mg: '' })
-const newIngredient = (): Ingredient => ({ name: '', amount: '', unit: 'g', state: 'raw', reference: '100', values: emptyValues() })
+const newIngredient = (): Ingredient => ({ name: '', amount: '', unit: 'g', state: 'raw', reference: '100', values: emptyValues(), seasoningVersionId: null })
 const stateNames: Record<FoodState, string> = { raw: 'ดิบ', cooked: 'สุก', as_sold: 'ตามสภาพที่ซื้อ' }
 const pages = [
   { id: 'home', label: 'หน้าหลัก', compact: 'หน้าแรก' },
@@ -29,6 +29,8 @@ export function App() {
   const [page, setPage] = useState<PageId>(readPage)
   const [ingredientsVisited, setIngredientsVisited] = useState(() => readPage() === 'ingredients')
   const [ingredients, setIngredients] = useState([newIngredient()])
+  const [savedSeasonings, setSavedSeasonings] = useState<SavedSeasoning[]>([])
+  const [seasoningsError, setSeasoningsError] = useState('')
   const [portion, setPortion] = useState('1')
   const [result, setResult] = useState<Result | null>(null)
   const [error, setError] = useState('')
@@ -49,6 +51,16 @@ export function App() {
     }
   }, [page])
 
+  useEffect(() => {
+    if (page !== 'recipes') return
+    fetch('/experimental/seasonings').then(async response => {
+      const payload = await response.json()
+      if (!response.ok) throw new Error('โหลดเครื่องปรุงที่บันทึกไว้ไม่ได้')
+      setSavedSeasonings((payload.items as SavedSeasoning[]).filter(item => item.reviewed))
+      setSeasoningsError('')
+    }).catch(() => setSeasoningsError('โหลดเครื่องปรุงที่บันทึกไว้ไม่ได้ ตรวจว่า API ทำงานอยู่บนเครื่องนี้'))
+  }, [page])
+
   function navigate(event: React.MouseEvent<HTMLAnchorElement>, nextPage: PageId) {
     event.preventDefault()
     window.history.pushState(null, '', `#${nextPage}`)
@@ -60,6 +72,20 @@ export function App() {
     revision.current++
     setIngredients(current => current.map((item, i) => i === index ? { ...item, ...changes } : item))
     setResult(null)
+  }
+
+  function selectSeasoning(index: number, versionId: string) {
+    if (!versionId) {
+      update(index, { ...newIngredient(), amount: ingredients[index].amount })
+      return
+    }
+    const seasoning = savedSeasonings.find(item => item.version_id === Number(versionId))
+    if (!seasoning) return
+    update(index, {
+      name: seasoning.name, seasoningVersionId: seasoning.version_id, unit: seasoning.basis_unit,
+      state: 'as_sold', reference: String(seasoning.basis_quantity),
+      values: Object.fromEntries(nutrients.map(([key]) => [key, seasoning.nutrients[key] === null ? '' : String(seasoning.nutrients[key])])) as Ingredient['values'],
+    })
   }
 
   async function calculate(event: React.FormEvent<HTMLFormElement>) {
@@ -113,20 +139,23 @@ export function App() {
           {ingredients.map((item, index) => <fieldset className="ingredient-card" key={index}>
             <legend>วัตถุดิบ {index + 1}</legend>
             {ingredients.length > 1 && <button type="button" className="remove-button" aria-label={`ลบวัตถุดิบ ${index + 1}`} onClick={() => { revision.current++; setIngredients(items => items.filter((_, i) => i !== index)); setResult(null) }}>ลบ</button>}
-            <label>ชื่อวัตถุดิบ <input value={item.name} onChange={e => update(index, { name: e.target.value })} placeholder="เช่น ข้าวสวย" autoComplete="off" /></label>
+            <label>เลือกเครื่องปรุงที่บันทึกไว้ <select value={item.seasoningVersionId ?? ''} onChange={e => selectSeasoning(index, e.target.value)}><option value="">กรอกวัตถุดิบสมมติเอง</option>{savedSeasonings.map(seasoning => <option key={seasoning.version_id} value={seasoning.version_id}>{seasoning.name}{seasoning.brand ? ` · ${seasoning.brand}` : ''} (รุ่น {seasoning.version_id})</option>)}</select></label>
+            {item.seasoningVersionId === null && <label>ชื่อวัตถุดิบ <input value={item.name} onChange={e => update(index, { name: e.target.value })} placeholder="เช่น ข้าวสวย" autoComplete="off" /></label>}
+            {item.seasoningVersionId !== null && <p className="footnote">ใช้ข้อมูลที่บันทึกไว้จากรุ่นนี้ ระบบคำนวณจะอ่านค่าจากฐานข้อมูลโดยตรง</p>}
             <div className="field-grid">
-              <label>ปริมาณที่ใช้ <span className="input-unit"><input required inputMode="decimal" type="number" min="0.00000001" step="any" value={item.amount} onChange={e => update(index, { amount: e.target.value })} placeholder="เช่น 150" /><select aria-label="หน่วยปริมาณ" value={item.unit} onChange={e => update(index, { unit: e.target.value as Ingredient['unit'] })}><option value="g">กรัม</option><option value="ml">มล.</option></select></span></label>
-              <label>สภาพอาหาร <select value={item.state} onChange={e => update(index, { state: e.target.value as FoodState })}>{Object.entries(stateNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+              <label>ปริมาณที่ใช้ <span className="input-unit"><input required inputMode="decimal" type="number" min="0.00000001" step="any" value={item.amount} onChange={e => update(index, { amount: e.target.value })} placeholder="เช่น 150" /><select aria-label="หน่วยปริมาณ" value={item.unit} disabled={item.seasoningVersionId !== null} onChange={e => update(index, { unit: e.target.value as Ingredient['unit'] })}><option value="g">กรัม</option><option value="ml">มล.</option></select></span></label>
+              <label>สภาพอาหาร <select value={item.state} disabled={item.seasoningVersionId !== null} onChange={e => update(index, { state: e.target.value as FoodState })}>{Object.entries(stateNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
             </div>
-            <label>ข้อมูลสารอาหารต่อ <span className="inline-input"><input required inputMode="decimal" type="number" min="0.00000001" step="any" value={item.reference} onChange={e => update(index, { reference: e.target.value })} /><span>{item.unit === 'g' ? 'กรัม' : 'มล.'} (หน่วยเดียวกับปริมาณที่ใช้)</span></span></label>
+            <label>ข้อมูลสารอาหารต่อ <span className="inline-input"><input required inputMode="decimal" type="number" min="0.00000001" step="any" value={item.reference} readOnly={item.seasoningVersionId !== null} onChange={e => update(index, { reference: e.target.value })} /><span>{item.unit === 'g' ? 'กรัม' : 'มล.'} (หน่วยเดียวกับปริมาณที่ใช้)</span></span></label>
             <div className="nutrient-grid"><p className="subheading">สารอาหารในปริมาณอ้างอิง <span>เว้นว่างได้เมื่อไม่ทราบ</span></p>
-              {nutrients.map(([key, label, unit]) => <label key={key}>{label} <span className="nutrient-unit"><input inputMode="decimal" type="number" min="0" step="any" value={item.values[key]} onChange={e => update(index, { values: { ...item.values, [key]: e.target.value } })} placeholder="ไม่ทราบ" /><span>{unit}</span></span></label>)}
+              {nutrients.map(([key, label, unit]) => <label key={key}>{label} <span className="nutrient-unit"><input inputMode="decimal" type="number" min="0" step="any" value={item.values[key]} readOnly={item.seasoningVersionId !== null} onChange={e => update(index, { values: { ...item.values, [key]: e.target.value } })} placeholder="ไม่ทราบ" /><span>{unit}</span></span></label>)}
             </div>
           </fieldset>)}
           <section className="portion-card"><label htmlFor="portion">สัดส่วนที่เสิร์ฟ</label><div><input id="portion" required inputMode="decimal" type="number" min="0.00000001" max="1" step="any" value={portion} onChange={e => { revision.current++; setPortion(e.target.value); setResult(null) }} /><span>ส่วนของสูตรทั้งหมด (0–1)</span></div></section>
           <label className="attestation"><input type="checkbox" required /> ยืนยันว่าข้อมูลทั้งหมดเป็นตัวเลขสมมติ ไม่ได้ใช้ค่าจากฉลากอาหารจริงหรือข้อมูลผู้ป่วย</label>
           <button className="submit-button" type="submit" disabled={busy}>{busy ? 'กำลังคำนวณ…' : 'คำนวณสารอาหาร'}</button>
         </form>
+        {seasoningsError && <p className="error" role="status">{seasoningsError}</p>}
         {error && <p className="error" role="alert">{error}</p>}
         {result && <section className="results" aria-live="polite" aria-labelledby="results-title"><div className="result-title"><h2 id="results-title">สารอาหารโดยประมาณ · {result.portion} ส่วน</h2><span className="status-pill">ไม่ใช่คำแนะนำทางการแพทย์</span></div>
           <ul>{nutrients.map(([key, label, unit]) => { const total = result.totals[key]; return <li key={key}><span>{label}</span><strong>{total.value === null ? 'ไม่ทราบ' : `${total.value} ${unit}`}</strong><small>{total.complete ? 'ข้อมูลครบตามที่กรอก' : 'ข้อมูลไม่ครบ · มีรายการที่ไม่ทราบ'}</small></li> })}</ul>

@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictInt, ValidationError
 
 from nutrition.calculator import NUTRIENTS, Measure, NutrientSource, calculate
 from nutrition.label_parser import parse_nutrition_label
@@ -54,6 +54,7 @@ class IngredientInput(BaseModel):
     reference_quantity: Positive
     reference_unit: Literal["g", "ml"]
     reference_food_state: Literal["raw", "cooked", "as_sold"]
+    seasoning_version_id: Optional[Annotated[StrictInt, Field(gt=0)]] = None
     energy_kcal: Optional[Number] = None
     protein_g: Optional[Number] = None
     sodium_mg: Optional[Number] = None
@@ -236,10 +237,20 @@ async def save_seasoning(request: Request):
 def calculate_recipe(payload: RecipeInput):
     ingredients = []
     for index, item in enumerate(payload.ingredients, 1):
-        reference = Measure(item.reference_quantity, item.reference_unit, item.reference_food_state)
         amount = Measure(item.amount, item.unit, item.food_state)
-        values = {name: getattr(item, name) for name in NUTRIENTS}
-        source = NutrientSource(reference, values, f"synthetic request ingredient {index}")
+        if item.seasoning_version_id is not None:
+            seasoning = _demo_store().get_reviewed_version(item.seasoning_version_id)
+            if seasoning is None:
+                raise HTTPException(status_code=422, detail="Unknown reviewed seasoning version")
+            if (item.unit != seasoning["basis_unit"] or item.food_state != seasoning["food_state"]):
+                raise HTTPException(status_code=422, detail="Amount unit and food state must match saved seasoning")
+            reference = Measure(seasoning["basis_quantity"], seasoning["basis_unit"], seasoning["food_state"])
+            source = NutrientSource(reference, seasoning["nutrients"],
+                                    f"synthetic saved seasoning version {seasoning['version_id']}", reviewed=True)
+        else:
+            reference = Measure(item.reference_quantity, item.reference_unit, item.reference_food_state)
+            values = {name: getattr(item, name) for name in NUTRIENTS}
+            source = NutrientSource(reference, values, f"synthetic request ingredient {index}")
         ingredients.append((amount, source))
     try:
         totals, unreviewed = calculate(ingredients, payload.portion)
