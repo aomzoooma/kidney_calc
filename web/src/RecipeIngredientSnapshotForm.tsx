@@ -69,7 +69,7 @@ export function RecipeIngredientSnapshotForm({ ingredient, disabled, onBusyChang
     }
   }
 
-  return <section className="usda-search recipe-snapshot-review" aria-label={`ตรวจข้อมูลวัตถุดิบ ${ingredient.name || 'ที่กรอกเอง'} ก่อนบันทึก`}>
+  return <section className="recipe-snapshot-review" aria-label={`ตรวจข้อมูลวัตถุดิบ ${ingredient.name || 'ที่กรอกเอง'} ก่อนบันทึก`}>
     <h3>บันทึกข้อมูลวัตถุดิบนี้ในเครื่อง</h3>
     <p>ตรวจข้อมูลในแถว แล้วระบุแหล่งที่มาของค่าที่กรอกเอง · บันทึกเป็นรุ่นอ้างอิงคงที่ · ช่องสารอาหารที่เว้นว่างยังเป็น “ไม่ทราบ”</p>
     <div className="thai-query-suggestion" role="note">
