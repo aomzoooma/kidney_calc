@@ -50,7 +50,7 @@ The current `/health` route only confirms that the process responds. Do not bind
 
 ## Run the experimental calculator on this PC
 
-This preview accepts invented sample numbers only. It does not save profiles or recipes, connect OCR to the screen, or support remote phone access. Do not enter real food labels or patient information.
+This preview accepts invented sample numbers and synthetic TEST ONLY images only. The OCR panel calls local Ollama and displays untrusted text for comparison with the image; it does not save or verify values. It does not save profiles or recipes or support remote phone access. Do not enter real food labels or patient information. See the terms and model gate in [WINDOWS_OCR_TEST.md](WINDOWS_OCR_TEST.md).
 
 Complete the dependency setup above, then open two PowerShell windows in the repository folder. In the first:
 

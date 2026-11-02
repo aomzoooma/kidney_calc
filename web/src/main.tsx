@@ -1,6 +1,7 @@
 import { StrictMode, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { buildCalculationPayload, isCurrentRevision, nutrients, type FoodState, type Ingredient, type NutrientKey } from './request'
+import { OcrPreview } from './OcrPreview'
 import './style.css'
 
 type Result = {
@@ -83,6 +84,7 @@ export function App() {
         <ul>{nutrients.map(([key, label, unit]) => { const total = result.totals[key]; return <li key={key}><span>{label}</span><strong>{total.value === null ? 'ไม่ทราบ' : `${total.value} ${unit}`}</strong><small>{total.complete ? 'ข้อมูลครบตามที่กรอก' : 'ข้อมูลไม่ครบ · มีรายการที่ไม่ทราบ'}</small></li> })}</ul>
         <p className="footnote">ค่าที่ทราบรวมตามสูตรและสัดส่วนเสิร์ฟ ค่าที่เว้นว่างยังคงเป็น “ไม่ทราบ” ไม่ได้ถือเป็นศูนย์</p>
       </section>}
+      <OcrPreview />
     </main>
     <footer><p>ต้นแบบทดลอง · ไม่บันทึกข้อมูล · ไม่มีข้อมูลอาหารจริงหรือการตรวจสอบทางคลินิก</p></footer>
   </div>

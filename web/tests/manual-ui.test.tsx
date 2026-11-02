@@ -27,7 +27,7 @@ describe('manual recipe UI', () => {
     render(<App />)
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
-    expect(screen.getByRole('checkbox').required).toBe(true)
+    expect(screen.getByRole('checkbox', { name: /ยืนยันว่าข้อมูลทั้งหมด/ }).required).toBe(true)
     expect(screen.getByText(/ตัวเลขสมมติเท่านั้น/)).toBeTruthy()
     expect(screen.getByText(/ห้ามใช้ค่าจากฉลากอาหารจริงหรือข้อมูลผู้ป่วย/)).toBeTruthy()
     fireEvent.change(screen.getAllByLabelText(/ปริมาณที่ใช้/)[0], { target: { value: '100' } })
@@ -51,7 +51,7 @@ describe('manual recipe UI', () => {
     render(<App />)
 
     fireEvent.change(screen.getAllByLabelText(/ปริมาณที่ใช้/)[0], { target: { value: '100' } })
-    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('checkbox', { name: /ยืนยันว่าข้อมูลทั้งหมด/ }))
     fireEvent.click(screen.getByRole('button', { name: 'คำนวณสารอาหาร' }))
     expect(fetchMock).toHaveBeenCalledTimes(1)
 

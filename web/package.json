@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc --noEmit && vite build",
     "dev": "vite --host 127.0.0.1",
-    "test": "node --test tests/request.test.mjs && vitest run --environment jsdom tests/manual-ui.test.tsx"
+    "test": "node --test tests/request.test.mjs && vitest run --environment jsdom tests/*.test.tsx"
   },
   "dependencies": {
     "react": "19.2.0",
