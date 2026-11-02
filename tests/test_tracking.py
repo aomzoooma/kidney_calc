@@ -143,6 +143,54 @@ class MealTrackingStoreTest(unittest.TestCase):
                 with self.subTest(statement=statement), self.assertRaisesRegex(sqlite3.IntegrityError, "immutable"):
                     db.execute(statement, params)
 
+    def test_goals_snapshot_latest_per_nutrient_and_latest_same_day_correction(self):
+        self.profiles.add_goal(self.profile_id, "sodium_mg", 1800, "mg/day", "2026-01-01", "asserted A")
+        self.profiles.add_goal(self.profile_id, "sodium_mg", 1700, "custom", "2026-01-02", "asserted B")
+        corrected = self.profiles.add_goal(
+            self.profile_id, "sodium_mg", 1600, "unvalidated-unit", "2026-01-02", "asserted correction"
+        )
+        entry = self.tracking.record_consumption(
+            self.profile_id, self.recipe_ids[0], datetime(2026, 1, 3, tzinfo=timezone.utc), Decimal("1")
+        )
+        goals = self.tracking.get_entry(entry)["goals"]
+        self.assertEqual(len(goals), 1)
+        self.assertEqual(goals[0]["goal_id"], corrected)
+        self.assertEqual(goals[0]["unit"], "unvalidated-unit")
+
+    def test_child_rows_cannot_be_added_after_snapshot_is_sealed(self):
+        entry = self.tracking.record_consumption(
+            self.profile_id, self.recipe_ids[0], datetime(2026, 1, 3, tzinfo=timezone.utc), Decimal("1")
+        )
+        with sqlite3.connect(self.database) as db, self.assertRaisesRegex(sqlite3.IntegrityError, "sealed"):
+            db.execute(
+                "INSERT INTO meal_entry_ingredients (meal_entry_id, position, ingredient_version_id, ingredient_name, amount, unit, food_state, version, provider, source_version, retrieved_on, source_reference, provenance, basis_quantity, basis_unit, source_food_state, reviewed) VALUES (?, 1, ?, 'Injected', '1', 'g', 'raw', '1', 'P', 'V', '2026-01-01', 'ref', 'synthetic', '100', 'g', 'raw', 0)",
+                (entry, self.version_ids[0]),
+            )
+
+    def test_void_and_correction_are_audited_and_removed_from_totals(self):
+        first = self.tracking.record_consumption(
+            self.profile_id, self.recipe_ids[0], datetime(2026, 1, 3, tzinfo=timezone.utc), Decimal("1")
+        )
+        replacement = self.tracking.correct_consumption(
+            first, datetime(2026, 1, 3, 12, tzinfo=timezone.utc), Decimal("0.5"), "synthetic correction"
+        )
+        result = self.tracking.get_daily_totals(self.profile_id, date(2026, 1, 3))
+        self.assertEqual(result["entry_count"], 1)
+        self.assertEqual(result["totals"]["protein_g"], (Decimal("5.0"), True))
+        self.assertEqual(self.tracking.get_entry(first)["adjustment"]["replacement_entry_id"], replacement)
+        with self.assertRaises(ValueError):
+            self.tracking.correct_consumption(
+                first, datetime(2026, 1, 3, tzinfo=timezone.utc), Decimal("1"), "second correction"
+            )
+
+        second = self.tracking.record_consumption(
+            self.profile_id, self.recipe_ids[0], datetime(2026, 1, 3, 13, tzinfo=timezone.utc), Decimal("1")
+        )
+        self.tracking.void_consumption(second, "synthetic mistaken log")
+        result = self.tracking.get_daily_totals(self.profile_id, date(2026, 1, 3))
+        self.assertEqual(result["entry_count"], 1)
+        self.assertEqual(self.tracking.get_entry(second)["adjustment"]["action"], "void")
+
 
 if __name__ == "__main__":
     unittest.main()

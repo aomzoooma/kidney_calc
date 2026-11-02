@@ -7,12 +7,15 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from nutrition.calculator import NUTRIENTS, Measure, NutrientSource, calculate
 
 
-# Thailand currently uses UTC+07:00 without DST; fixed offset avoids a Windows tzdata dependency.
-BANGKOK = timezone(timedelta(hours=7), "Asia/Bangkok")
+try:
+    BANGKOK = ZoneInfo("Asia/Bangkok")
+except ZoneInfoNotFoundError as exc:
+    raise RuntimeError("IANA timezone data is required; install the tzdata package") from exc
 
 
 def _positive_id(value, field):
@@ -111,6 +114,19 @@ class MealTrackingStore:
                     complete INTEGER NOT NULL CHECK(complete IN (0, 1)),
                     PRIMARY KEY(meal_entry_id, nutrient)
                 );
+                CREATE TABLE IF NOT EXISTS meal_entry_seals (
+                    meal_entry_id INTEGER PRIMARY KEY REFERENCES meal_entries(id) ON DELETE RESTRICT,
+                    sealed_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS meal_entry_adjustments (
+                    meal_entry_id INTEGER PRIMARY KEY REFERENCES meal_entries(id) ON DELETE RESTRICT,
+                    action TEXT NOT NULL CHECK(action IN ('void', 'correct')),
+                    replacement_entry_id INTEGER REFERENCES meal_entries(id) ON DELETE RESTRICT,
+                    reason TEXT NOT NULL CHECK(length(trim(reason)) > 0),
+                    recorded_at TEXT NOT NULL,
+                    CHECK((action = 'void' AND replacement_entry_id IS NULL) OR
+                          (action = 'correct' AND replacement_entry_id IS NOT NULL AND replacement_entry_id != meal_entry_id))
+                );
                 CREATE TRIGGER IF NOT EXISTS meal_entries_no_replace
                     BEFORE INSERT ON meal_entries
                     WHEN EXISTS (SELECT 1 FROM meal_entries WHERE id = NEW.id) BEGIN
@@ -124,10 +140,31 @@ class MealTrackingStore:
                     BEFORE DELETE ON meal_entries BEGIN
                     SELECT RAISE(ABORT, 'meal history is immutable');
                 END;
+                CREATE TRIGGER IF NOT EXISTS meal_entry_seal_validate
+                    BEFORE INSERT ON meal_entry_seals
+                    WHEN (SELECT COUNT(*) FROM meal_entry_ingredients WHERE meal_entry_id = NEW.meal_entry_id) = 0
+                      OR (SELECT COUNT(*) FROM meal_entry_totals WHERE meal_entry_id = NEW.meal_entry_id) != {len(NUTRIENTS)}
+                    BEGIN SELECT RAISE(ABORT, 'incomplete meal snapshot'); END;
+                CREATE TRIGGER IF NOT EXISTS meal_entry_seals_no_update
+                    BEFORE UPDATE ON meal_entry_seals BEGIN SELECT RAISE(ABORT, 'meal history is immutable'); END;
+                CREATE TRIGGER IF NOT EXISTS meal_entry_seals_no_delete
+                    BEFORE DELETE ON meal_entry_seals BEGIN SELECT RAISE(ABORT, 'meal history is immutable'); END;
+                CREATE TRIGGER IF NOT EXISTS meal_adjustments_no_update
+                    BEFORE UPDATE ON meal_entry_adjustments BEGIN SELECT RAISE(ABORT, 'meal adjustments are immutable'); END;
+                CREATE TRIGGER IF NOT EXISTS meal_adjustments_no_delete
+                    BEFORE DELETE ON meal_entry_adjustments BEGIN SELECT RAISE(ABORT, 'meal adjustments are immutable'); END;
+                CREATE TRIGGER IF NOT EXISTS meal_adjustments_no_replace
+                    BEFORE INSERT ON meal_entry_adjustments
+                    WHEN EXISTS(SELECT 1 FROM meal_entry_adjustments WHERE meal_entry_id = NEW.meal_entry_id)
+                    BEGIN SELECT RAISE(ABORT, 'meal adjustments are immutable'); END;
                 CREATE TRIGGER IF NOT EXISTS meal_entry_ingredients_no_update
                     BEFORE UPDATE ON meal_entry_ingredients BEGIN
                     SELECT RAISE(ABORT, 'meal history is immutable');
                 END;
+                CREATE TRIGGER IF NOT EXISTS meal_entry_ingredients_after_seal
+                    BEFORE INSERT ON meal_entry_ingredients
+                    WHEN EXISTS(SELECT 1 FROM meal_entry_seals WHERE meal_entry_id = NEW.meal_entry_id)
+                    BEGIN SELECT RAISE(ABORT, 'meal history is sealed'); END;
                 CREATE TRIGGER IF NOT EXISTS meal_entry_ingredients_no_replace
                     BEFORE INSERT ON meal_entry_ingredients
                     WHEN EXISTS (SELECT 1 FROM meal_entry_ingredients
@@ -142,6 +179,10 @@ class MealTrackingStore:
                     BEFORE UPDATE ON meal_entry_goals BEGIN
                     SELECT RAISE(ABORT, 'meal history is immutable');
                 END;
+                CREATE TRIGGER IF NOT EXISTS meal_entry_goals_after_seal
+                    BEFORE INSERT ON meal_entry_goals
+                    WHEN EXISTS(SELECT 1 FROM meal_entry_seals WHERE meal_entry_id = NEW.meal_entry_id)
+                    BEGIN SELECT RAISE(ABORT, 'meal history is sealed'); END;
                 CREATE TRIGGER IF NOT EXISTS meal_entry_goals_no_replace
                     BEFORE INSERT ON meal_entry_goals
                     WHEN EXISTS (SELECT 1 FROM meal_entry_goals
@@ -156,6 +197,10 @@ class MealTrackingStore:
                     BEFORE UPDATE ON meal_entry_totals BEGIN
                     SELECT RAISE(ABORT, 'meal history is immutable');
                 END;
+                CREATE TRIGGER IF NOT EXISTS meal_entry_totals_after_seal
+                    BEFORE INSERT ON meal_entry_totals
+                    WHEN EXISTS(SELECT 1 FROM meal_entry_seals WHERE meal_entry_id = NEW.meal_entry_id)
+                    BEGIN SELECT RAISE(ABORT, 'meal history is sealed'); END;
                 CREATE TRIGGER IF NOT EXISTS meal_entry_totals_no_replace
                     BEFORE INSERT ON meal_entry_totals
                     WHEN EXISTS (SELECT 1 FROM meal_entry_totals
@@ -217,8 +262,13 @@ class MealTrackingStore:
             totals, _ = calculate(inputs, portion)
             goals = db.execute(
                 """SELECT id, nutrient, amount, unit, effective_on, confirmed_by
-                   FROM clinician_goals WHERE profile_id = ? AND effective_on <= ?
-                   ORDER BY effective_on, id""",
+                   FROM (
+                       SELECT id, nutrient, amount, unit, effective_on, confirmed_by,
+                              ROW_NUMBER() OVER (
+                                  PARTITION BY nutrient ORDER BY effective_on DESC, id DESC
+                              ) AS rank
+                       FROM clinician_goals WHERE profile_id = ? AND effective_on <= ?
+                   ) WHERE rank = 1 ORDER BY nutrient""",
                 (profile_id, local_date),
             ).fetchall()
             cursor = db.execute(
@@ -257,7 +307,49 @@ class MealTrackingStore:
                 [(entry_id, nutrient, str(value) if value is not None else None, int(complete))
                  for nutrient, (value, complete) in totals.items()],
             )
+            db.execute(
+                "INSERT INTO meal_entry_seals(meal_entry_id, sealed_at) VALUES (?, ?)",
+                (entry_id, datetime.now(timezone.utc).isoformat(timespec="microseconds")),
+            )
             return entry_id
+
+    def void_consumption(self, entry_id: int, reason: str) -> None:
+        """Append a user-asserted void; original snapshot remains available for audit."""
+        entry_id = _positive_id(entry_id, "entry_id")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("reason must be non-empty text")
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT 1 FROM meal_entry_seals WHERE meal_entry_id = ?", (entry_id,)).fetchone() is None:
+                raise LookupError("meal entry not found")
+            db.execute(
+                "INSERT INTO meal_entry_adjustments VALUES (?, 'void', NULL, ?, ?)",
+                (entry_id, reason.strip(), datetime.now(timezone.utc).isoformat(timespec="microseconds")),
+            )
+
+    def correct_consumption(self, entry_id: int, consumed_at: datetime, portion: Decimal,
+                            reason: str) -> int:
+        """Record a replacement snapshot and append a correction link to the original."""
+        entry_id = _positive_id(entry_id, "entry_id")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("reason must be non-empty text")
+        with self._connect() as db:
+            original = db.execute(
+                "SELECT profile_id, recipe_id FROM meal_entries WHERE id = ?", (entry_id,)
+            ).fetchone()
+            if original is None:
+                raise LookupError("meal entry not found")
+            if db.execute("SELECT 1 FROM meal_entry_adjustments WHERE meal_entry_id = ?", (entry_id,)).fetchone():
+                raise ValueError("meal entry already adjusted")
+            profile_id, recipe_id = original["profile_id"], original["recipe_id"]
+        replacement_id = self.record_consumption(profile_id, recipe_id, consumed_at, portion)
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute(
+                "INSERT INTO meal_entry_adjustments VALUES (?, 'correct', ?, ?, ?)",
+                (entry_id, replacement_id, reason.strip(), datetime.now(timezone.utc).isoformat(timespec="microseconds")),
+            )
+        return replacement_id
 
     def get_entry(self, entry_id: int) -> dict | None:
         entry_id = _positive_id(entry_id, "entry_id")
@@ -277,6 +369,10 @@ class MealTrackingStore:
                 "SELECT nutrient, subtotal, complete FROM meal_entry_totals WHERE meal_entry_id = ?",
                 (entry_id,),
             ).fetchall()
+            adjustment = db.execute(
+                "SELECT action, replacement_entry_id, reason, recorded_at FROM meal_entry_adjustments WHERE meal_entry_id = ?",
+                (entry_id,),
+            ).fetchone()
             snapshot_ingredients = []
             for row in ingredients:
                 item = dict(row)
@@ -291,6 +387,7 @@ class MealTrackingStore:
                 "portion": Decimal(entry["portion"]),
                 "ingredients": snapshot_ingredients,
                 "goals": [dict(row) for row in goals],
+                "adjustment": dict(adjustment) if adjustment else None,
                 "totals": {
                     row["nutrient"]: (
                         Decimal(row["subtotal"]) if row["subtotal"] is not None else None,
@@ -308,13 +405,18 @@ class MealTrackingStore:
             if db.execute("SELECT 1 FROM patient_profiles WHERE id = ?", (profile_id,)).fetchone() is None:
                 raise LookupError("profile not found")
             count = db.execute(
-                "SELECT COUNT(*) FROM meal_entries WHERE profile_id = ? AND local_date BETWEEN ? AND ?",
+                """SELECT COUNT(*) FROM meal_entries e
+                   JOIN meal_entry_seals s ON s.meal_entry_id = e.id
+                   WHERE e.profile_id = ? AND e.local_date BETWEEN ? AND ?
+                     AND NOT EXISTS (SELECT 1 FROM meal_entry_adjustments a WHERE a.meal_entry_id = e.id)""",
                 (profile_id, start_text, end_text),
             ).fetchone()[0]
             rows = db.execute(
                 """SELECT t.nutrient, t.subtotal, t.complete FROM meal_entry_totals t
                    JOIN meal_entries e ON e.id = t.meal_entry_id
-                   WHERE e.profile_id = ? AND e.local_date BETWEEN ? AND ?""",
+                   JOIN meal_entry_seals s ON s.meal_entry_id = e.id
+                   WHERE e.profile_id = ? AND e.local_date BETWEEN ? AND ?
+                     AND NOT EXISTS (SELECT 1 FROM meal_entry_adjustments a WHERE a.meal_entry_id = e.id)""",
                 (profile_id, start_text, end_text),
             ).fetchall()
             grouped = {nutrient: [] for nutrient in NUTRIENTS}
