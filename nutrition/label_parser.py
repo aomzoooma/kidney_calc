@@ -25,6 +25,7 @@ class Nutrient:
 class LabelParse:
     serving_basis: Optional[Basis]
     nutrients: dict[str, Nutrient]
+    basis_conflict: bool = False
     confidence: str = "low"
     requires_human_review: bool = True
 
@@ -181,4 +182,4 @@ def parse_nutrition_label(text: str) -> LabelParse:
             nutrients[key] = Nutrient(value, unit, basis, "low")
         else:
             nutrients[key] = Nutrient()
-    return LabelParse(serving, nutrients)
+    return LabelParse(serving, nutrients, conflicting_headers)

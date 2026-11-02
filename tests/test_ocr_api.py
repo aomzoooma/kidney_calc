@@ -16,7 +16,10 @@ class OCRApiTest(unittest.TestCase):
         with patch('api.main.ocr_image', new=AsyncMock(return_value=OCRResult('TEST ONLY'))) as mock:
             result = self.client.post('/experimental/ocr', json=self.payload)
         self.assertEqual(result.status_code, 200)
-        self.assertEqual(result.json(), {'text': 'TEST ONLY', 'requires_human_review': True, 'clinical_use': False})
+        self.assertEqual(result.json()['text'], 'TEST ONLY')
+        self.assertTrue(result.json()['requires_human_review'])
+        self.assertFalse(result.json()['clinical_use'])
+        self.assertIsNone(result.json()['suggestions']['nutrients']['sodium_mg'])
         mock.assert_awaited_once_with(b'test', 'image/png')
 
     def test_rejects_bad_input_and_sanitizes_errors(self):

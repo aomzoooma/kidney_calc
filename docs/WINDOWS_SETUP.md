@@ -56,6 +56,9 @@ Complete the dependency setup above, then open two PowerShell windows in the rep
 
 ```powershell
 Set-Location C:\work\kidney_calc
+$DemoDir = Join-Path $env:LOCALAPPDATA 'KidneyCalcDemo'
+New-Item -ItemType Directory -Force $DemoDir | Out-Null
+$env:KIDNEY_EXPERIMENTAL_DB = Join-Path $DemoDir 'synthetic-demo.sqlite3'
 .\.venv\Scripts\python.exe -m uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -66,7 +69,7 @@ Set-Location C:\work\kidney_calc
 npm run dev --prefix web
 ```
 
-Open the local address printed by Vite, usually `http://127.0.0.1:5173/`. Keep both windows open while testing; stop each with Ctrl+C. The frontend development server proxies the experimental calculator to the local API. If either port is occupied, stop and resolve the conflict rather than exposing the service to the network. This preview has not been tested on the target Windows PC.
+Open the local address printed by Vite, usually `http://127.0.0.1:5173/`. Keep both windows open while testing; stop each with Ctrl+C. The frontend development server proxies the experimental calculator to the local API. The configured database is for invented test data only; do not reuse a patient database. If either port is occupied, stop and resolve the conflict rather than exposing the service to the network. This preview has not been tested on the target Windows PC.
 
 ## 3. Record Windows and GPU facts
 
