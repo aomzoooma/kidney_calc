@@ -447,6 +447,28 @@ describe('manual recipe UI', () => {
     await screen.findByText(/เปิดสูตร “สูตรเดิม” แล้ว/)
   })
 
+  it('filters saved recipes to favorites and opens the selected recipe to repeat it', async () => {
+    const detail = { id: 8, name: 'ข้าวต้มที่ชอบ', favorite: true, ingredients: [{ ingredient_version_id: 24, amount: '60', unit: 'g',
+      food_state: 'cooked', ingredient_name: 'ข้าวสวย', basis_quantity: '100', basis_unit: 'g', reviewed: true,
+      energy_kcal: null, protein_g: '2', sodium_mg: '1', potassium_mg: null, phosphorus_mg: null }] }
+    const fetchMock = vi.fn(async (url: string) => url === '/experimental/recipes'
+      ? { ok: true, json: async () => ({ items: [
+        { id: 7, name: 'สูตรทั่วไป', favorite: false }, { id: 8, name: 'ข้าวต้มที่ชอบ', favorite: true },
+      ] }) }
+      : url === '/experimental/recipes/8' ? { ok: true, json: async () => detail }
+        : url === '/experimental/seasonings' ? { ok: true, json: async () => ({ items: [] }) }
+          : { ok: true, json: async () => response })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    expect(await screen.findByText('สูตรทั่วไป')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'เมนูโปรด (1)' }))
+    expect(screen.queryByText('สูตรทั่วไป')).toBeNull()
+    fireEvent.click(await screen.findByRole('button', { name: 'เปิดสูตรนี้' }))
+    expect(await screen.findByDisplayValue('ข้าวต้มที่ชอบ')).toBeTruthy()
+    expect(fetchMock.mock.calls.some(([url]) => url === '/experimental/recipes/8')).toBe(true)
+  })
+
   it('opens, edits, renames, and favorites a saved recipe', async () => {
     const detail = { id: 7, name: 'ข้าวต้ม', favorite: false, ingredients: [{
       ingredient_version_id: 24, amount: '60', unit: 'g', food_state: 'cooked', ingredient_name: 'ข้าวสวย',
@@ -484,7 +506,7 @@ describe('manual recipe UI', () => {
 
   it('keeps an unsaved draft when opening a saved recipe is cancelled', async () => {
     const fetchMock = vi.fn(async (url: string) => url === '/experimental/recipes'
-      ? { ok: true, json: async () => ({ items: [{ id: 7, name: 'ข้าวต้ม', favorite: false }] }) }
+      ? { ok: true, json: async () => ({ items: [{ id: 7, name: 'ข้าวต้ม', favorite: true }] }) }
       : url === '/experimental/seasonings' ? { ok: true, json: async () => ({ items: [] }) }
         : { ok: true, json: async () => response })
     vi.stubGlobal('fetch', fetchMock)
@@ -493,11 +515,72 @@ describe('manual recipe UI', () => {
     openRecipes()
     fireEvent.change(screen.getByLabelText(/ชื่อวัตถุดิบ/), { target: { value: 'สูตรที่ยังไม่บันทึก' } })
     fireEvent.change(document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] .field-grid input[type="number"]')!, { target: { value: '55' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'เมนูโปรด (1)' }))
     fireEvent.click(await screen.findByRole('button', { name: 'เปิดสูตรนี้' }))
     expect(window.confirm).toHaveBeenCalledOnce()
     expect((screen.getByLabelText(/ชื่อวัตถุดิบ/) as HTMLInputElement).value).toBe('สูตรที่ยังไม่บันทึก')
     expect(document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] .field-grid input[type="number"]')?.value).toBe('55')
     expect(fetchMock.mock.calls.some(([url]) => url === '/experimental/recipes/7')).toBe(false)
+  })
+
+  it('restores focus after removing the last favorite and preserves the draft through confirmation', async () => {
+    const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/experimental/recipes') return { ok: true, json: async () => ({ items: [
+        { id: 7, name: 'สูตรทั่วไป', favorite: false }, { id: 8, name: 'ข้าวต้มที่ชอบ', favorite: true },
+      ] }) }
+      if (url === '/experimental/seasonings') return { ok: true, json: async () => ({ items: [] }) }
+      if (url === '/experimental/recipes/8' && options?.method === 'PATCH') return { ok: true, json: async () => ({ updated: true }) }
+      return { ok: true, json: async () => response }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(<App />)
+    openRecipes()
+    expect(await screen.findByText('ข้าวต้มที่ชอบ')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'เมนูโปรด (1)' }))
+    fireEvent.change(screen.getByLabelText(/ชื่อวัตถุดิบ/), { target: { value: 'แบบร่างของฉัน' } })
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] .field-grid input[type="number"]')!, { target: { value: '55' } })
+
+    const removeFavorite = screen.getByRole('button', { name: 'นำออกจากรายการโปรด' })
+    removeFavorite.focus()
+    fireEvent.click(removeFavorite)
+    expect(await screen.findByText(/ยังไม่มีเมนูโปรด/)).toBeTruthy()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'เมนูโปรด (0)' }))
+    expect(window.confirm).not.toHaveBeenCalled()
+    expect((screen.getByLabelText(/ชื่อวัตถุดิบ/) as HTMLInputElement).value).toBe('แบบร่างของฉัน')
+    expect(document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] .field-grid input[type="number"]')?.value).toBe('55')
+
+    fireEvent.click(screen.getByRole('button', { name: 'สูตรทั้งหมด (2)' }))
+    const generalRecipe = screen.getByText('สูตรทั่วไป').closest('li')!
+    fireEvent.click(within(generalRecipe).getByRole('button', { name: 'เปิดสูตรนี้' }))
+    expect(window.confirm).toHaveBeenCalledOnce()
+    expect(fetchMock.mock.calls.some(([url]) => url === '/experimental/recipes/7')).toBe(false)
+    expect((screen.getByLabelText(/ชื่อวัตถุดิบ/) as HTMLInputElement).value).toBe('แบบร่างของฉัน')
+  })
+
+  it('restores focus when removing one of several favorites', async () => {
+    const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/experimental/recipes') return { ok: true, json: async () => ({ items: [
+        { id: 7, name: 'ข้าวต้มมื้อแรก', favorite: true }, { id: 8, name: 'ข้าวต้มมื้อสอง', favorite: true },
+      ] }) }
+      if (url === '/experimental/seasonings') return { ok: true, json: async () => ({ items: [] }) }
+      if (url === '/experimental/recipes/7' && options?.method === 'PATCH') return { ok: true, json: async () => ({ updated: true }) }
+      return { ok: true, json: async () => response }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    expect(await screen.findByText('ข้าวต้มมื้อแรก')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'เมนูโปรด (2)' }))
+
+    const firstFavorite = screen.getByText('ข้าวต้มมื้อแรก').closest('li')!
+    const removeFavorite = within(firstFavorite).getByRole('button', { name: 'นำออกจากรายการโปรด' })
+    removeFavorite.focus()
+    fireEvent.click(removeFavorite)
+    expect(await screen.findByText('ข้าวต้มมื้อสอง')).toBeTruthy()
+    expect(await screen.findByText('นำ “ข้าวต้มมื้อแรก” ออกจากรายการโปรดแล้ว')).toBeTruthy()
+    expect(screen.queryByText('ข้าวต้มมื้อแรก')).toBeNull()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'เมนูโปรด (1)' }))
   })
 
   it('previews and explicitly saves USDA values before using them in a reusable recipe', async () => {

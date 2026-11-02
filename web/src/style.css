@@ -48,6 +48,7 @@ p { margin: .4rem 0; }
 .thai-query-suggestion .thai-query-choice { margin-top: .35rem; }
 .thai-query-choice { justify-self: start; min-height: 2.75rem; padding: .45rem .75rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--surface); color: var(--green); font: inherit; font-weight: 750; cursor: pointer; }
 .thai-query-choice[aria-pressed="true"] { border-color: var(--green); background: #eaf4ee; }
+.recipe-filters { display: flex; flex-wrap: wrap; gap: .5rem; margin: .75rem 0 .25rem; }
 .thai-query-warning { color: #754c13 !important; font-size: .95rem !important; font-weight: 700; }
 .usda-results { list-style: none; padding: 0; margin: .5rem 0 0; }
 .usda-results li { display: grid; gap: .25rem; padding: .7rem 0; border-top: 1px solid var(--line); }
