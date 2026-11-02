@@ -1346,6 +1346,57 @@ describe('manual recipe UI', () => {
     expect(screen.queryByText('ผลเก่า')).toBeNull()
   })
 
+  it('announces a failed local ingredient search after its disclosure closes', async () => {
+    let rejectSearch!: (reason?: unknown) => void
+    const pending = new Promise<{ ok: boolean; json: () => Promise<{ items: object[] }> }>((_resolve, reject) => { rejectSearch = reject })
+    vi.stubGlobal('fetch', vi.fn((url: string) => url.startsWith('/experimental/ingredients/search')
+      ? pending : Promise.resolve({ ok: true, json: async () => ({ items: [] }) })))
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getByLabelText('ชื่อที่บันทึกไว้'), { target: { value: 'ข้าวสมมติ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'ค้นหารายการในเครื่อง' }))
+    const summary = screen.getByText('ค้นหาวัตถุดิบที่บันทึกไว้ในเครื่อง', { selector: 'summary' })
+    fireEvent.click(summary)
+    expect(summary.closest('details')?.open).toBe(false)
+    await act(async () => { rejectSearch(new TypeError('Failed to fetch')); await pending.catch(() => undefined) })
+    expect(screen.getByRole('alert').textContent).toMatch(/ค้นหารายการในเครื่องไม่สำเร็จ/)
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+  })
+
+  it('announces a failed USDA search after its disclosure closes', async () => {
+    let rejectSearch!: (reason?: unknown) => void
+    const pending = new Promise<{ ok: boolean; json: () => Promise<{ items: object[] }> }>((_resolve, reject) => { rejectSearch = reject })
+    vi.stubGlobal('fetch', vi.fn((url: string) => url.startsWith('/experimental/usda/search')
+      ? pending : Promise.resolve({ ok: true, json: async () => ({ items: [] }) })))
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getByLabelText('ชื่ออาหารหรือคำค้นภาษาไทยหรืออังกฤษ'), { target: { value: 'rice' } })
+    fireEvent.click(screen.getByRole('button', { name: 'ค้นหา USDA' }))
+    const summary = screen.getByText('USDA · ข้อมูลอาหารหนึ่งรายการ ไม่ใช่สูตร', { selector: 'summary' })
+    fireEvent.click(summary)
+    expect(summary.closest('details')?.open).toBe(false)
+    await act(async () => { rejectSearch(new TypeError('Failed to fetch')); await pending.catch(() => undefined) })
+    expect(screen.getByRole('alert').textContent).toMatch(/ค้นหา USDA ไม่สำเร็จ/)
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+  })
+
+  it('announces a failed USDA query translation after its disclosure closes', async () => {
+    let rejectTranslation!: (reason?: unknown) => void
+    const pending = new Promise<{ ok: boolean; json: () => Promise<{ translation: string }> }>((_resolve, reject) => { rejectTranslation = reject })
+    vi.stubGlobal('fetch', vi.fn((url: string) => url === '/experimental/local-food-translation'
+      ? pending : Promise.resolve({ ok: true, json: async () => ({ items: [] }) })))
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getByLabelText('ชื่ออาหารหรือคำค้นภาษาไทยหรืออังกฤษ'), { target: { value: 'rice' } })
+    fireEvent.click(screen.getByRole('button', { name: 'แปลคำค้นอังกฤษเป็นไทยผ่าน Ollama' }))
+    const summary = screen.getByText('USDA · ข้อมูลอาหารหนึ่งรายการ ไม่ใช่สูตร', { selector: 'summary' })
+    fireEvent.click(summary)
+    expect(summary.closest('details')?.open).toBe(false)
+    await act(async () => { rejectTranslation(new TypeError('Failed to fetch')); await pending.catch(() => undefined) })
+    expect(screen.getByRole('alert').textContent).toMatch(/แปลไม่สำเร็จ/)
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+  })
+
   it('clears previous USDA results and ignores an older delayed result after the query changes', async () => {
     let resolveStale!: (value: { ok: boolean; json: () => Promise<{ items: object[] }> }) => void
     const staleSearch = new Promise<{ ok: boolean; json: () => Promise<{ items: object[] }> }>(resolve => { resolveStale = resolve })
