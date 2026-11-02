@@ -52,6 +52,14 @@ class IngredientStoreTest(unittest.TestCase):
                 db.execute("UPDATE ingredient_versions SET reviewed = 0 WHERE id = ?", (version_id,))
             with self.assertRaisesRegex(sqlite3.IntegrityError, "immutable"):
                 db.execute("DELETE FROM ingredient_versions WHERE id = ?", (version_id,))
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "immutable"):
+                db.execute(
+                    "INSERT OR REPLACE INTO ingredient_versions "
+                    "(id, ingredient_id, version, provider, source_version, retrieved_on, "
+                    "source_reference, provenance, basis_quantity, basis_unit, food_state, reviewed) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (version_id, ingredient_id, "1", "P", "V", "2026-01-01", "ref", "manual", "100", "g", "raw", 0),
+                )
         with self.assertRaises(sqlite3.IntegrityError):
             self.add(ingredient_id, "1", {})
         self.add(ingredient_id, "2", {})
@@ -65,6 +73,9 @@ class IngredientStoreTest(unittest.TestCase):
                 db.execute("UPDATE ingredients SET name = ? WHERE id = ?", ("Renamed item", ingredient_id))
             with self.assertRaisesRegex(sqlite3.IntegrityError, "identities are immutable"):
                 db.execute("DELETE FROM ingredients WHERE id = ?", (ingredient_id,))
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "identities are immutable"):
+                db.execute("INSERT OR REPLACE INTO ingredients(id, name) VALUES (?, ?)",
+                           (ingredient_id, "Replaced item"))
         record = self.store.get_ingredient(ingredient_id)
         self.assertEqual(record["name"], "Synthetic lentil")
         self.assertEqual(record["versions"][0]["version"], "1")

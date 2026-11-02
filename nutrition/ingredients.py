@@ -71,6 +71,11 @@ class IngredientStore:
                     {nutrient_columns},
                     UNIQUE(ingredient_id, version)
                 );
+                CREATE TRIGGER IF NOT EXISTS ingredients_no_replace
+                    BEFORE INSERT ON ingredients
+                    WHEN EXISTS (SELECT 1 FROM ingredients WHERE id = NEW.id) BEGIN
+                    SELECT RAISE(ABORT, 'ingredient identities are immutable');
+                END;
                 CREATE TRIGGER IF NOT EXISTS ingredients_no_update
                     BEFORE UPDATE ON ingredients BEGIN
                     SELECT RAISE(ABORT, 'ingredient identities are immutable');
@@ -81,6 +86,14 @@ class IngredientStore:
                 END;
                 CREATE TRIGGER IF NOT EXISTS ingredient_versions_no_update
                     BEFORE UPDATE ON ingredient_versions BEGIN
+                    SELECT RAISE(ABORT, 'ingredient versions are immutable');
+                END;
+                CREATE TRIGGER IF NOT EXISTS ingredient_versions_no_replace
+                    BEFORE INSERT ON ingredient_versions
+                    WHEN EXISTS (
+                        SELECT 1 FROM ingredient_versions
+                        WHERE id = NEW.id OR (ingredient_id = NEW.ingredient_id AND version = NEW.version)
+                    ) BEGIN
                     SELECT RAISE(ABORT, 'ingredient versions are immutable');
                 END;
                 CREATE TRIGGER IF NOT EXISTS ingredient_versions_no_delete
