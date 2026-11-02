@@ -66,6 +66,396 @@ describe('manual recipe UI', () => {
     expect(fetchMock.mock.calls.some(([url]) => url === '/experimental/recipes/calculate')).toBe(false)
   })
 
+  it('saves a custom recipe from reviewed local ingredient versions only', async () => {
+    const saved = { ingredient_id: 8, version_id: 24, name: 'ข้าวสวย', brand: null, version: '1',
+      provider: 'Synthetic provider', source_version: 'fixture-v1', source_date: null, retrieved_on: '2026-11-03',
+      source_reference: 'synthetic fixture', provenance: 'synthetic input', basis_quantity: '100', basis_unit: 'g',
+      food_state: 'cooked', reviewed: true,
+      nutrients: { energy_kcal: null, protein_g: '2', sodium_mg: '1', potassium_mg: null, phosphorus_mg: null } }
+    const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/experimental/recipes' && options?.method === 'POST') return { ok: true, json: async () => ({ id: 42, name: 'ข้าวต้ม', saved: true }) }
+      if (url === '/experimental/recipes') return { ok: true, json: async () => ({ items: [] }) }
+      if (url === '/experimental/seasonings') return { ok: true, json: async () => ({ items: [] }) }
+      if (url.startsWith('/experimental/ingredients/search')) return { ok: true, json: async () => ({ items: [saved] }) }
+      return { ok: true, json: async () => response }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getByLabelText('ชื่อที่บันทึกไว้'), { target: { value: 'ข้าว' } })
+    fireEvent.click(screen.getByRole('button', { name: 'ค้นหารายการในเครื่อง' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'เลือกเป็นรายการใหม่' }))
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-ingredient-index="1"] .field-grid input[type="number"]')!, { target: { value: '120' } })
+    fireEvent.click(screen.getByRole('button', { name: 'ลบวัตถุดิบ 1' }))
+    fireEvent.change(screen.getByLabelText('ชื่อสูตร'), { target: { value: 'ข้าวต้ม' } })
+    const save = screen.getByRole('button', { name: 'บันทึกสูตร' })
+    expect((save as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(save)
+    await screen.findByText('บันทึกสูตร “ข้าวต้ม” แล้ว')
+    const createCall = fetchMock.mock.calls.find(([url, options]) => url === '/experimental/recipes' && options?.method === 'POST')
+    expect(JSON.parse(String(createCall?.[1]?.body))).toEqual({ synthetic_only: true, name: 'ข้าวต้ม', ingredients: [
+      { ingredient_version_id: 24, amount: '120', unit: 'g', food_state: 'cooked' },
+    ] })
+  })
+
+  it('does not let a delayed initial recipe list erase a newly created recipe', async () => {
+    let releaseList!: (value: { ok: boolean; json: () => Promise<{ items: object[] }> }) => void
+    const listPending = new Promise<{ ok: boolean; json: () => Promise<{ items: object[] }> }>(resolve => { releaseList = resolve })
+    const saved = { ingredient_id: 8, version_id: 24, name: 'ข้าวสวย', brand: null, version: '1', provider: 'fixture',
+      source_version: 'v1', source_date: null, retrieved_on: '2026-11-03', source_reference: 'fixture', provenance: 'synthetic',
+      basis_quantity: '100', basis_unit: 'g', food_state: 'cooked', reviewed: true,
+      nutrients: { energy_kcal: null, protein_g: '2', sodium_mg: '1', potassium_mg: null, phosphorus_mg: null } }
+    const fetchMock = vi.fn((url: string, options?: RequestInit) => {
+      if (url === '/experimental/recipes' && options?.method === 'POST') return Promise.resolve({ ok: true, json: async () => ({ id: 42 }) })
+      if (url === '/experimental/recipes') return listPending
+      if (url === '/experimental/seasonings') return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+      if (url.startsWith('/experimental/ingredients/search')) return Promise.resolve({ ok: true, json: async () => ({ items: [saved] }) })
+      return Promise.resolve({ ok: true, json: async () => response })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getByLabelText('ชื่อที่บันทึกไว้'), { target: { value: 'ข้าว' } })
+    fireEvent.click(screen.getByRole('button', { name: 'ค้นหารายการในเครื่อง' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'เลือกเป็นรายการใหม่' }))
+    fireEvent.click(screen.getByRole('button', { name: 'ลบวัตถุดิบ 1' }))
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] .field-grid input[type="number"]')!, { target: { value: '80' } })
+    fireEvent.change(screen.getByLabelText('ชื่อสูตร'), { target: { value: 'ข้าวต้มใหม่' } })
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกสูตร' }))
+    await screen.findByText('บันทึกสูตร “ข้าวต้มใหม่” แล้ว')
+    await act(async () => { releaseList({ ok: true, json: async () => ({ items: [] }) }); await listPending })
+    expect(screen.getByRole('button', { name: 'เปิดสูตรนี้' })).toBeTruthy()
+    expect(screen.getByText('ข้าวต้มใหม่')).toBeTruthy()
+  })
+
+  it('serializes favorite changes with recipe saves', async () => {
+    let releaseFavorite!: (value: { ok: boolean; json: () => Promise<object> }) => void
+    let releaseSave!: (value: { ok: boolean; json: () => Promise<object> }) => void
+    const favoritePending = new Promise<{ ok: boolean; json: () => Promise<object> }>(resolve => { releaseFavorite = resolve })
+    const savePending = new Promise<{ ok: boolean; json: () => Promise<object> }>(resolve => { releaseSave = resolve })
+    const detail = { id: 7, name: 'ข้าวต้ม', favorite: false, ingredients: [{ ingredient_version_id: 24, amount: '60', unit: 'g',
+      food_state: 'cooked', ingredient_name: 'ข้าวสวย', basis_quantity: '100', basis_unit: 'g', reviewed: true,
+      energy_kcal: null, protein_g: '2', sodium_mg: '1', potassium_mg: null, phosphorus_mg: null }] }
+    const fetchMock = vi.fn((url: string, options?: RequestInit) => {
+      if (url === '/experimental/recipes') return Promise.resolve({ ok: true, json: async () => ({ items: [{ id: 7, name: 'ข้าวต้ม', favorite: false }] }) })
+      if (url === '/experimental/seasonings') return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+      if (url === '/experimental/recipes/7' && options?.method === 'PATCH' && JSON.parse(String(options.body)).favorite) return favoritePending
+      if (url === '/experimental/recipes/7/ingredients' && options?.method === 'PUT') return savePending
+      if (url === '/experimental/recipes/7') return Promise.resolve({ ok: true, json: async () => detail })
+      return Promise.resolve({ ok: true, json: async () => response })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    fireEvent.click(await screen.findByRole('button', { name: 'เปิดสูตรนี้' }))
+    await screen.findByDisplayValue('ข้าวต้ม')
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] .field-grid input[type="number"]')!, { target: { value: '75' } })
+    fireEvent.click(screen.getByRole('button', { name: 'เพิ่มในรายการโปรด' }))
+    const save = screen.getByRole('button', { name: 'บันทึกการเปลี่ยนแปลง' }) as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    fireEvent.click(save)
+    expect(fetchMock.mock.calls.some(([url, options]) => url === '/experimental/recipes/7/ingredients' && options?.method === 'PUT')).toBe(false)
+    await act(async () => { releaseFavorite({ ok: true, json: async () => ({ updated: true }) }); await favoritePending })
+    await screen.findByRole('button', { name: 'นำออกจากรายการโปรด' })
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการเปลี่ยนแปลง' }))
+    expect((screen.getByRole('button', { name: 'นำออกจากรายการโปรด' }) as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => { releaseSave({ ok: true, json: async () => ({ updated: true }) }); await savePending })
+    await screen.findByText('บันทึกการเปลี่ยนแปลงของ “ข้าวต้ม” แล้ว')
+    expect(screen.getByText('อยู่ในรายการโปรด')).toBeTruthy()
+  })
+
+  it('locks recipe identity and editing while a new recipe save is pending', async () => {
+    let releaseCreate!: (value: { ok: boolean; json: () => Promise<{ id: number; name: string }> }) => void
+    const createPending = new Promise<{ ok: boolean; json: () => Promise<{ id: number; name: string }> }>(resolve => { releaseCreate = resolve })
+    const detail = { id: 7, name: 'สูตรเดิม', favorite: false, ingredients: [{
+      ingredient_version_id: 24, amount: '60', unit: 'g', food_state: 'cooked', ingredient_name: 'ข้าวสวย',
+      basis_quantity: '100', basis_unit: 'g', reviewed: true,
+      energy_kcal: null, protein_g: '2', sodium_mg: '1', potassium_mg: null, phosphorus_mg: null,
+    }] }
+    const fetchMock = vi.fn((url: string, options?: RequestInit) => {
+      if (url === '/experimental/recipes' && options?.method === 'POST') return createPending
+      if (url === '/experimental/recipes') return Promise.resolve({ ok: true, json: async () => ({ items: [{ id: 7, name: 'สูตรเดิม', favorite: false }] }) })
+      if (url === '/experimental/seasonings') return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+      if (url.startsWith('/experimental/ingredients/search')) return Promise.resolve({ ok: true, json: async () => ({ items: [{
+        ingredient_id: 8, version_id: 24, name: 'ข้าวสวย', brand: null, version: '1', provider: 'fixture',
+        source_version: 'v1', source_date: null, retrieved_on: '2026-11-03', source_reference: 'fixture',
+        provenance: 'synthetic fixture', basis_quantity: '100', basis_unit: 'g', food_state: 'cooked', reviewed: true,
+        nutrients: { energy_kcal: null, protein_g: '2', sodium_mg: '1', potassium_mg: null, phosphorus_mg: null },
+      }] }) })
+      if (url === '/experimental/recipes/7') return Promise.resolve({ ok: true, json: async () => detail })
+      return Promise.resolve({ ok: true, json: async () => response })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getByLabelText('ชื่อที่บันทึกไว้'), { target: { value: 'ข้าว' } })
+    fireEvent.click(screen.getByRole('button', { name: 'ค้นหารายการในเครื่อง' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'เลือกเป็นรายการใหม่' }))
+    fireEvent.click(screen.getByRole('button', { name: 'ลบวัตถุดิบ 1' }))
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] .field-grid input[type="number"]')!, { target: { value: '90' } })
+    fireEvent.change(screen.getByLabelText('ชื่อสูตร'), { target: { value: 'สูตรใหม่' } })
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกสูตร' }))
+
+    const name = screen.getByLabelText('ชื่อสูตร') as HTMLInputElement
+    const open = await screen.findByRole('button', { name: 'เปิดสูตรนี้' }) as HTMLButtonElement
+    const newRecipe = screen.getByRole('button', { name: 'เริ่มสูตรใหม่' }) as HTMLButtonElement
+    expect(name.disabled).toBe(true)
+    expect(open.disabled).toBe(true)
+    expect(newRecipe.disabled).toBe(true)
+    expect(document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] .field-grid input[type="number"]')!.matches(':disabled')).toBe(true)
+    fireEvent.click(open)
+    fireEvent.change(name, { target: { value: 'พยายามแก้ระหว่างบันทึก' } })
+    expect(name.value).toBe('สูตรใหม่')
+    expect(fetchMock.mock.calls.some(([url]) => url === '/experimental/recipes/7')).toBe(false)
+
+    await act(async () => { releaseCreate({ ok: true, json: async () => ({ id: 42, name: 'สูตรใหม่' }) }); await createPending })
+    await screen.findByText('บันทึกสูตร “สูตรใหม่” แล้ว')
+    expect((screen.getByLabelText('ชื่อสูตร') as HTMLInputElement).value).toBe('สูตรใหม่')
+    expect(fetchMock.mock.calls.some(([url, options]) => url === '/experimental/recipes/42/ingredients' && options?.method === 'PUT')).toBe(false)
+  })
+
+  it('blocks saving and starting a new recipe while a saved recipe is loading', async () => {
+    let releaseDetail!: (value: { ok: boolean; json: () => Promise<object> }) => void
+    const detailPending = new Promise<{ ok: boolean; json: () => Promise<object> }>(resolve => { releaseDetail = resolve })
+    const saved = { ingredient_id: 8, version_id: 24, name: 'ข้าวสวย', brand: null, version: '1', provider: 'fixture',
+      source_version: 'v1', source_date: null, retrieved_on: '2026-11-03', source_reference: 'fixture', provenance: 'synthetic',
+      basis_quantity: '100', basis_unit: 'g', food_state: 'cooked', reviewed: true,
+      nutrients: { energy_kcal: null, protein_g: '2', sodium_mg: '1', potassium_mg: null, phosphorus_mg: null } }
+    const detail = { id: 7, name: 'สูตรเดิม', favorite: false, ingredients: [{ ingredient_version_id: 24, amount: '60', unit: 'g',
+      food_state: 'cooked', ingredient_name: 'ข้าวสวย', basis_quantity: '100', basis_unit: 'g', reviewed: true,
+      energy_kcal: null, protein_g: '2', sodium_mg: '1', potassium_mg: null, phosphorus_mg: null }] }
+    const fetchMock = vi.fn((url: string, options?: RequestInit) => {
+      if (url === '/experimental/recipes/7') return detailPending
+      if (url === '/experimental/recipes' && options?.method === 'POST') return Promise.resolve({ ok: true, json: async () => ({ id: 42 }) })
+      if (url === '/experimental/recipes') return Promise.resolve({ ok: true, json: async () => ({ items: [{ id: 7, name: 'สูตรเดิม', favorite: false }] }) })
+      if (url === '/experimental/seasonings') return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+      if (url.startsWith('/experimental/ingredients/search')) return Promise.resolve({ ok: true, json: async () => ({ items: [saved] }) })
+      return Promise.resolve({ ok: true, json: async () => response })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getByLabelText('ชื่อที่บันทึกไว้'), { target: { value: 'ข้าว' } })
+    fireEvent.click(screen.getByRole('button', { name: 'ค้นหารายการในเครื่อง' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'เลือกเป็นรายการใหม่' }))
+    fireEvent.click(screen.getByRole('button', { name: 'ลบวัตถุดิบ 1' }))
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] .field-grid input[type="number"]')!, { target: { value: '90' } })
+    fireEvent.change(screen.getByLabelText('ชื่อสูตร'), { target: { value: 'แบบร่าง' } })
+    fireEvent.click(screen.getByRole('button', { name: 'เปิดสูตรนี้' }))
+    expect((screen.getByRole('button', { name: 'บันทึกสูตร' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'เริ่มสูตรใหม่' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกสูตร' }))
+    fireEvent.click(screen.getByRole('button', { name: 'เริ่มสูตรใหม่' }))
+    expect(fetchMock.mock.calls.some(([url, options]) => url === '/experimental/recipes' && options?.method === 'POST')).toBe(false)
+    await act(async () => { releaseDetail({ ok: true, json: async () => detail }); await detailPending })
+    await screen.findByText(/เปิดสูตร “สูตรเดิม” แล้ว/)
+  })
+
+  it('opens, edits, renames, and favorites a saved recipe', async () => {
+    const detail = { id: 7, name: 'ข้าวต้ม', favorite: false, ingredients: [{
+      ingredient_version_id: 24, amount: '60', unit: 'g', food_state: 'cooked', ingredient_name: 'ข้าวสวย',
+      basis_quantity: '100', basis_unit: 'g', reviewed: true, energy_kcal: null, protein_g: '2', sodium_mg: '1', potassium_mg: null, phosphorus_mg: null,
+    }] }
+    const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/experimental/recipes') return { ok: true, json: async () => ({ items: [{ id: 7, name: 'ข้าวต้ม', favorite: false }] }) }
+      if (url === '/experimental/seasonings') return { ok: true, json: async () => ({ items: [] }) }
+      if (url === '/experimental/recipes/7' && options?.method === 'PATCH') return { ok: true, json: async () => ({ updated: true }) }
+      if (url === '/experimental/recipes/7/ingredients' && options?.method === 'PUT') return { ok: true, json: async () => ({ ingredients_updated: true }) }
+      if (url === '/experimental/recipes/7') return { ok: true, json: async () => detail }
+      return { ok: true, json: async () => response }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    fireEvent.click(await screen.findByRole('button', { name: 'เปิดสูตรนี้' }))
+    await screen.findByDisplayValue('ข้าวต้ม')
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] .field-grid input[type="number"]')!, { target: { value: '75' } })
+    fireEvent.change(screen.getByLabelText('ชื่อสูตร'), { target: { value: 'ข้าวต้มของฉัน' } })
+    fireEvent.click(screen.getByRole('button', { name: 'เพิ่มในรายการโปรด' }))
+    await screen.findByRole('button', { name: 'นำออกจากรายการโปรด' })
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการเปลี่ยนแปลง' }))
+    await screen.findByText('บันทึกการเปลี่ยนแปลงของ “ข้าวต้มของฉัน” แล้ว')
+    const replaceCall = fetchMock.mock.calls.find(([url, options]) => url === '/experimental/recipes/7/ingredients' && options?.method === 'PUT')
+    expect(JSON.parse(String(replaceCall?.[1]?.body))).toEqual({ synthetic_only: true, ingredients: [
+      { ingredient_version_id: 24, amount: '75', unit: 'g', food_state: 'cooked' },
+    ] })
+    const favoriteCall = fetchMock.mock.calls.find(([url, options]) => url === '/experimental/recipes/7' && options?.method === 'PATCH')
+    expect(JSON.parse(String(favoriteCall?.[1]?.body))).toEqual({ synthetic_only: true, favorite: true })
+    const renameCall = fetchMock.mock.calls.find(([url, options]) => url === '/experimental/recipes/7' && options?.method === 'PATCH'
+      && JSON.parse(String(options?.body)).name)
+    expect(JSON.parse(String(renameCall?.[1]?.body))).toEqual({ synthetic_only: true, name: 'ข้าวต้มของฉัน' })
+  })
+
+  it('keeps an unsaved draft when opening a saved recipe is cancelled', async () => {
+    const fetchMock = vi.fn(async (url: string) => url === '/experimental/recipes'
+      ? { ok: true, json: async () => ({ items: [{ id: 7, name: 'ข้าวต้ม', favorite: false }] }) }
+      : url === '/experimental/seasonings' ? { ok: true, json: async () => ({ items: [] }) }
+        : { ok: true, json: async () => response })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getByLabelText(/ชื่อวัตถุดิบ/), { target: { value: 'สูตรที่ยังไม่บันทึก' } })
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] .field-grid input[type="number"]')!, { target: { value: '55' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'เปิดสูตรนี้' }))
+    expect(window.confirm).toHaveBeenCalledOnce()
+    expect((screen.getByLabelText(/ชื่อวัตถุดิบ/) as HTMLInputElement).value).toBe('สูตรที่ยังไม่บันทึก')
+    expect(document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] .field-grid input[type="number"]')?.value).toBe('55')
+    expect(fetchMock.mock.calls.some(([url]) => url === '/experimental/recipes/7')).toBe(false)
+  })
+
+  it('previews and explicitly saves USDA values before using them in a reusable recipe', async () => {
+    const preview = { fdc_id: 88, name: 'Rice, cooked', source_type: 'Foundation', source_version: 'fixture-v1',
+      source_date: '2026-01-01', food_state: 'cooked', basis_quantity: '100', basis_unit: 'g',
+      nutrients: { energy_kcal: '130', protein_g: '2.7', sodium_mg: null, potassium_mg: '35', phosphorus_mg: null },
+      snapshot_digest: 'fixture-digest' }
+    const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/experimental/recipes' && options?.method === 'POST') return { ok: true, json: async () => ({ id: 42, name: 'ข้าวต้ม', saved: true }) }
+      if (url === '/experimental/recipes') return { ok: true, json: async () => ({ items: [] }) }
+      if (url === '/experimental/seasonings') return { ok: true, json: async () => ({ items: [] }) }
+      if (url.startsWith('/experimental/usda/search')) return { ok: true, json: async () => ({ items: [{
+        fdc_id: 88, description: 'Rice, cooked', source_type: 'Foundation', source_version: 'fixture-v1', food_state: 'cooked',
+      }] }) }
+      if (url === '/experimental/ingredients/usda/preview') return { ok: true, json: async () => preview }
+      if (url === '/experimental/ingredients/usda') return { ok: true, json: async () => ({ ingredient_id: 10, version_id: 31 }) }
+      return { ok: true, json: async () => response }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getByLabelText('ชื่ออาหารหรือคำค้นภาษาไทยหรืออังกฤษ'), { target: { value: 'rice cooked' } })
+    fireEvent.click(screen.getByRole('button', { name: 'ค้นหา USDA' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'เลือกวัตถุดิบนี้' }))
+    fireEvent.click(screen.getByRole('button', { name: 'ลบวัตถุดิบ 1' }))
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] .field-grid input[type="number"]')!, { target: { value: '80' } })
+    fireEvent.click(screen.getByRole('button', { name: 'ตรวจข้อมูล USDA ก่อนบันทึกในเครื่อง' }))
+    expect(await screen.findByText(/Rice, cooked · Foundation · fixture-v1/)).toBeTruthy()
+    expect(screen.getByText(/โซเดียม: ไม่ทราบ/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'ยืนยันและบันทึกวัตถุดิบนี้' })).toHaveProperty('disabled', true)
+    fireEvent.click(screen.getByRole('checkbox', { name: 'ตรวจชื่อ สภาพ และค่าสารอาหารแล้ว' }))
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันและบันทึกวัตถุดิบนี้' }))
+    await screen.findByText(/บันทึกข้อมูล USDA รุ่นที่ตรวจแล้วในเครื่อง/)
+    fireEvent.change(screen.getByLabelText('ชื่อสูตร'), { target: { value: 'ข้าวต้ม' } })
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกสูตร' }))
+    await screen.findByText('บันทึกสูตร “ข้าวต้ม” แล้ว')
+    const snapshotCall = fetchMock.mock.calls.find(([url]) => url === '/experimental/ingredients/usda')
+    expect(JSON.parse(String(snapshotCall?.[1]?.body))).toEqual({ synthetic_only: true, reviewed: true,
+      fdc_id: 88, food_state: 'cooked', snapshot_digest: 'fixture-digest' })
+    const createCall = fetchMock.mock.calls.find(([url, options]) => url === '/experimental/recipes' && options?.method === 'POST')
+    expect(JSON.parse(String(createCall?.[1]?.body))).toEqual({ synthetic_only: true, name: 'ข้าวต้ม', ingredients: [
+      { ingredient_version_id: 31, amount: '80', unit: 'g', food_state: 'cooked' },
+    ] })
+  })
+
+  it('clears a USDA preview when an earlier duplicate FDC row is removed', async () => {
+    const preview = { fdc_id: 88, name: 'Rice, cooked', source_type: 'Foundation', source_version: 'fixture-v1',
+      source_date: null, food_state: 'cooked', basis_quantity: '100', basis_unit: 'g',
+      nutrients: { energy_kcal: '130', protein_g: '2.7', sodium_mg: null, potassium_mg: '35', phosphorus_mg: null },
+      snapshot_digest: 'fixture-digest' }
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === '/experimental/recipes') return { ok: true, json: async () => ({ items: [] }) }
+      if (url === '/experimental/seasonings') return { ok: true, json: async () => ({ items: [] }) }
+      if (url.startsWith('/experimental/usda/search')) return { ok: true, json: async () => ({ items: [
+        { fdc_id: 88, description: 'Rice, cooked', source_type: 'Foundation', source_version: 'fixture-v1', food_state: 'cooked' },
+      ] }) }
+      if (url === '/experimental/ingredients/usda/preview') return { ok: true, json: async () => preview }
+      return { ok: true, json: async () => response }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getByLabelText('ชื่ออาหารหรือคำค้นภาษาไทยหรืออังกฤษ'), { target: { value: 'rice' } })
+    fireEvent.click(screen.getByRole('button', { name: 'ค้นหา USDA' }))
+    const choose = await screen.findByRole('button', { name: 'เลือกวัตถุดิบนี้' })
+    fireEvent.click(choose)
+    fireEvent.click(choose)
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มวัตถุดิบ/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'ลบวัตถุดิบ 1' }))
+    const reviewButtons = screen.getAllByRole('button', { name: 'ตรวจข้อมูล USDA ก่อนบันทึกในเครื่อง' })
+    fireEvent.click(reviewButtons[1])
+    await screen.findByText(/Rice, cooked · Foundation · fixture-v1/)
+    fireEvent.click(screen.getByRole('button', { name: 'ลบวัตถุดิบ 1' }))
+    expect(screen.queryByText(/Rice, cooked · Foundation · fixture-v1/)).toBeNull()
+    expect(screen.queryByRole('checkbox', { name: 'ตรวจชื่อ สภาพ และค่าสารอาหารแล้ว' })).toBeNull()
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/experimental/ingredients/usda')).toHaveLength(0)
+  })
+
+  it('ignores an older USDA preview after a newer row preview completes', async () => {
+    let resolveA!: (value: { ok: boolean; json: () => Promise<object> }) => void
+    let resolveB!: (value: { ok: boolean; json: () => Promise<object> }) => void
+    const pendingA = new Promise<{ ok: boolean; json: () => Promise<object> }>(resolve => { resolveA = resolve })
+    const pendingB = new Promise<{ ok: boolean; json: () => Promise<object> }>(resolve => { resolveB = resolve })
+    const preview = (fdc_id: number, name: string) => ({ fdc_id, name, source_type: 'Foundation', source_version: 'fixture-v1',
+      source_date: null, food_state: 'cooked', basis_quantity: '100', basis_unit: 'g',
+      nutrients: { energy_kcal: '100', protein_g: '2', sodium_mg: null, potassium_mg: null, phosphorus_mg: null }, snapshot_digest: `digest-${fdc_id}` })
+    const fetchMock = vi.fn((url: string, options?: RequestInit) => {
+      if (url === '/experimental/recipes') return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+      if (url.startsWith('/experimental/ingredients/search')) return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+      if (url === '/experimental/seasonings') return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+      if (url.startsWith('/experimental/usda/search')) return Promise.resolve({ ok: true, json: async () => ({ items: [
+        { fdc_id: 91, description: 'Rice A cooked', source_type: 'Foundation', source_version: 'fixture-v1', food_state: 'cooked' },
+        { fdc_id: 92, description: 'Rice B cooked', source_type: 'Foundation', source_version: 'fixture-v1', food_state: 'cooked' },
+      ] }) })
+      if (url === '/experimental/ingredients/usda/preview') {
+        const fdcId = JSON.parse(String(options?.body)).fdc_id
+        return fdcId === 91 ? pendingA : pendingB
+      }
+      return Promise.resolve({ ok: true, json: async () => response })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getByLabelText('ชื่ออาหารหรือคำค้นภาษาไทยหรืออังกฤษ'), { target: { value: 'rice' } })
+    fireEvent.click(screen.getByRole('button', { name: 'ค้นหา USDA' }))
+    const chooseButtons = await screen.findAllByRole('button', { name: 'เลือกวัตถุดิบนี้' })
+    fireEvent.click(chooseButtons[0])
+    fireEvent.click(chooseButtons[1])
+    const previewButtons = screen.getAllByRole('button', { name: 'ตรวจข้อมูล USDA ก่อนบันทึกในเครื่อง' })
+    fireEvent.click(previewButtons[0])
+    fireEvent.click(screen.getByRole('button', { name: 'ลบวัตถุดิบ 2' }))
+    fireEvent.click(screen.getByRole('button', { name: 'ตรวจข้อมูล USDA ก่อนบันทึกในเครื่อง' }))
+    await act(async () => { resolveB({ ok: true, json: async () => preview(92, 'Rice B cooked') }); await pendingB })
+    expect(await screen.findByText(/Rice B cooked · Foundation/)).toBeTruthy()
+    await act(async () => { resolveA({ ok: true, json: async () => preview(91, 'Rice A cooked') }); await pendingA })
+    expect(screen.getByText(/Rice B cooked · Foundation/)).toBeTruthy()
+    expect(screen.queryByText(/Rice A cooked · Foundation/)).toBeNull()
+  })
+
+  it('keeps the USDA draft and clears confirmation when the snapshot changes', async () => {
+    const preview = { fdc_id: 88, name: 'Rice, cooked', source_type: 'Foundation', source_version: 'fixture-v1',
+      source_date: null, food_state: 'cooked', basis_quantity: '100', basis_unit: 'g',
+      nutrients: { energy_kcal: '130', protein_g: '2.7', sodium_mg: null, potassium_mg: '35', phosphorus_mg: null },
+      snapshot_digest: 'stale-digest' }
+    const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/experimental/recipes') return { ok: true, json: async () => ({ items: [] }) }
+      if (url === '/experimental/seasonings') return { ok: true, json: async () => ({ items: [] }) }
+      if (url.startsWith('/experimental/usda/search')) return { ok: true, json: async () => ({ items: [{
+        fdc_id: 88, description: 'Rice, cooked', source_type: 'Foundation', source_version: 'fixture-v1', food_state: 'cooked',
+      }] }) }
+      if (url === '/experimental/ingredients/usda/preview') return { ok: true, json: async () => preview }
+      if (url === '/experimental/ingredients/usda') return { ok: false, status: 409, json: async () => ({ detail: 'USDA snapshot changed' }) }
+      return { ok: true, json: async () => response }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getByLabelText('ชื่ออาหารหรือคำค้นภาษาไทยหรืออังกฤษ'), { target: { value: 'rice cooked' } })
+    fireEvent.click(screen.getByRole('button', { name: 'ค้นหา USDA' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'เลือกวัตถุดิบนี้' }))
+    fireEvent.click(screen.getByRole('button', { name: 'ลบวัตถุดิบ 1' }))
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] .field-grid input[type="number"]')!, { target: { value: '80' } })
+    fireEvent.click(screen.getByRole('button', { name: 'ตรวจข้อมูล USDA ก่อนบันทึกในเครื่อง' }))
+    await screen.findByText(/Rice, cooked · Foundation/)
+    fireEvent.click(screen.getByRole('checkbox', { name: 'ตรวจชื่อ สภาพ และค่าสารอาหารแล้ว' }))
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันและบันทึกวัตถุดิบนี้' }))
+    expect(await screen.findByText(/ข้อมูล USDA เปลี่ยนหลังตรวจ/)).toBeTruthy()
+    expect((screen.getByLabelText('แหล่งข้อมูลวัตถุดิบ 1') as HTMLSelectElement).value).toBe('usda')
+    expect((document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] .field-grid input[type="number"]')!).value).toBe('80')
+    expect(screen.queryByRole('checkbox', { name: 'ตรวจชื่อ สภาพ และค่าสารอาหารแล้ว' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'ตรวจข้อมูล USDA ก่อนบันทึกในเครื่อง' })).toBeTruthy()
+  })
+
   it('searches English USDA entries and submits only selected ID plus amount', async () => {
     const fetchMock = vi.fn(async (url: string) => url.startsWith('/experimental/usda/search')
       ? { ok: true, json: async () => ({ items: [{ fdc_id: 77, description: 'Rice, brown, cooked',
