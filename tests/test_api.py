@@ -3,13 +3,16 @@
 import unittest
 import os
 import json
+import tempfile
+from decimal import Decimal
+from pathlib import Path
 from unittest.mock import patch
 
 import httpx
 
 from fastapi.testclient import TestClient
 
-from api.main import app
+from api.main import app, _demo_store
 
 
 class HealthTest(unittest.TestCase):
@@ -214,6 +217,67 @@ class ExperimentalRecipeApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertIn('unbranded USDA', response.json()['detail'])
         transport.close()
+
+
+class LocalThaiIngredientSearchTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.db_path = Path(self.temp.name) / 'synthetic-local.db'
+        self.env = patch.dict(os.environ, {'KIDNEY_EXPERIMENTAL_DB': str(self.db_path)})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self.client = TestClient(app, client=('127.0.0.1', 12345), base_url='http://127.0.0.1')
+        self.store = _demo_store().ingredients
+        self.reviewed_id = self.store.create_ingredient('ข้าวสมมติ')
+        self.reviewed_version = self.store.add_version(
+            self.reviewed_id, version='synthetic-v1', provider='user-entered',
+            source_version='reviewed fixture', retrieved_on='2026-11-02',
+            source_reference='synthetic test record', provenance='synthetic user-reviewed fixture',
+            basis_quantity=Decimal('100'), basis_unit='g', food_state='cooked', reviewed=True,
+            nutrients={'energy_kcal': Decimal('123'), 'sodium_mg': Decimal('0')})
+        unreviewed_id = self.store.create_ingredient('ข้าวสมมติไม่ตรวจ')
+        self.store.add_version(
+            unreviewed_id, version='draft-v1', provider='user-entered', source_version='draft',
+            retrieved_on='2026-11-02', source_reference='synthetic draft', provenance='synthetic draft',
+            basis_quantity=Decimal('100'), basis_unit='g', food_state='cooked', reviewed=False,
+            nutrients={'energy_kcal': Decimal('900')})
+
+    def test_search_is_local_thai_and_only_returns_reviewed_versions(self):
+        with patch('api.main.USDAFDCClient') as usda:
+            response = self.client.get('/experimental/ingredients/search', params={'q': 'ข้าวสมมติ'})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['local_only'])
+        items = response.json()['items']
+        self.assertEqual([item['version_id'] for item in items], [self.reviewed_version])
+        self.assertEqual(items[0]['food_state'], 'cooked')
+        self.assertEqual(items[0]['nutrients']['energy_kcal'], '123')
+        usda.assert_not_called()
+        self.assertEqual(self.client.get('/experimental/ingredients/search', params={'q': '   '}).status_code, 422)
+
+    def test_calculation_resolves_saved_version_server_side(self):
+        body = {'synthetic_only': True, 'portion': '1', 'ingredients': [{
+            'amount': '50', 'unit': 'g', 'food_state': 'cooked',
+            'reference_quantity': '1', 'reference_unit': 'g', 'reference_food_state': 'raw',
+            'source_type': 'saved', 'ingredient_version_id': self.reviewed_version,
+        }]}
+        response = self.client.post('/experimental/recipes/calculate', json=body)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['totals']['energy_kcal'], {'value': '61.5', 'complete': True})
+        self.assertEqual(response.json()['totals']['sodium_mg'], {'value': '0', 'complete': True})
+        self.assertEqual(response.json()['saved_sources'][0]['version_id'], self.reviewed_version)
+
+        body['ingredients'][0]['energy_kcal'] = '999'
+        self.assertEqual(self.client.post('/experimental/recipes/calculate', json=body).status_code, 422)
+        body['ingredients'][0].pop('energy_kcal')
+        body['ingredients'][0]['food_state'] = 'raw'
+        self.assertEqual(self.client.post('/experimental/recipes/calculate', json=body).status_code, 422)
+        body['ingredients'][0]['food_state'] = 'cooked'
+        body['ingredients'][0]['ingredient_version_id'] = 99999
+        self.assertEqual(self.client.post('/experimental/recipes/calculate', json=body).status_code, 422)
+        body['ingredients'][0]['ingredient_version_id'] = self.reviewed_version
+        body['ingredients'][0]['source_type'] = 'manual'
+        self.assertEqual(self.client.post('/experimental/recipes/calculate', json=body).status_code, 422)
 
 
 if __name__ == '__main__':
