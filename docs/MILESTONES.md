@@ -1,6 +1,18 @@
 # Milestones and acceptance criteria
 
-Status: planned; no milestone is complete until evidence is recorded in its PR or linked task. Patient data must not appear in those records.
+Status as of 2026-11-02: milestones are in progress; none is complete. GitHub milestones and their linked issues track outstanding work. Domain code is not the finished application or clinical evidence. Patient data must not appear in those records.
+
+After each merged PR, the orchestrator updates the related issue checklist and this summary when milestone-level progress changes. Before closing a milestone, verify every exit criterion and link review/test evidence; do not infer device, security, licensing or clinical approval from unit tests.
+
+| Milestone | Current verified progress | Remaining gate |
+| --- | --- | --- |
+| M0 | Repo, CI and Windows handoff merged. User reports Ollama/OCR installed on PC. | Target GPU/OCR evidence, data rights, private HTTPS and phone tests. |
+| M1 | Profile and ingredient stores, recipe calculator and experimental local API merged. | Authenticated UI/API, usable caregiver workflow, integration/E2E and clinical/data validation. |
+| M2 | Recipe domain and immutable meal snapshots/corrections merged. | UI, E2E and corrected-date goal interpretation (#15). |
+| M3 | OCR Windows test plan and integration task (#18) created. | Connect local model, photo review and field validation, model terms (#10), real-device evidence. |
+| M4 | Mobile shell merged. | Authentication/security review (#9), Windows backup/restore (#13), PWA and private remote device tests. |
+| M5 | Clinical/data review gates documented. | Clinician review and real-person acceptance. |
+| M6 | Deferred. | Hosting, cost, migration and security decision. |
 
 ## M0 — Foundation and feasibility
 
