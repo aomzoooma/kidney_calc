@@ -17,7 +17,11 @@ type FoodTextTranslation = { sourceText: string; translation: string; targetLang
 const emptyValues = (): Ingredient['values'] => ({ energy_kcal: '', protein_g: '', sodium_mg: '', potassium_mg: '', phosphorus_mg: '' })
 const newIngredient = (): Ingredient => ({ name: '', amount: '', unit: 'g', state: 'raw', reference: '100', values: emptyValues(), source: 'manual', seasoningVersionId: null, ingredientVersionId: null, fdcId: null, fdcState: null })
 const stateNames: Record<FoodState, string> = { raw: 'ดิบ', cooked: 'สุก', as_sold: 'ตามสภาพที่ซื้อ' }
-const foodStateLabel = (state: FoodState | null) => state ? stateNames[state] : 'ไม่ระบุสภาพ · ยังใช้คำนวณไม่ได้'
+const foodStateLabel = (state: FoodState | null) => state ? stateNames[state] : 'ระบบระบุสภาพดิบ/สุกไม่ได้ · ยังใช้คำนวณไม่ได้'
+const calculationErrorMessages: Record<string, string> = {
+  'USDA record does not identify raw or cooked state': 'ระบบระบุสภาพดิบ/สุกจากรายการ USDA นี้ไม่ได้ จึงยังคำนวณไม่ได้ · เลือกรายการที่ระบุสภาพ หรือใช้วัตถุดิบที่บันทึกไว้',
+  'Only unbranded USDA Foundation and SR Legacy records are supported': 'รายการ USDA หมวดนี้ยังคำนวณไม่ได้ · เลือกรายการ Foundation หรือ SR Legacy ที่ระบุสภาพอาหาร หรือใช้วัตถุดิบที่บันทึกไว้',
+}
 // Checked Thai food/condiment terms against Mahidol's ASEAN bilingual tables and
 // Department of Health condiment vocabulary. These expand the query only; they
 // never translate, rank, or select a USDA record.
@@ -319,10 +323,12 @@ export function App() {
   }
 
   function addUSDAFood(food: USDAFood) {
+    const foodState = food.food_state
+    if (foodState === null || !['Foundation', 'SR Legacy'].includes(food.source_type)) return
     revision.current++
     const index = ingredients.length
     setIngredients(current => [...current, { ...newIngredient(), source: 'usda', name: food.description,
-      fdcId: food.fdc_id, fdcState: food.food_state, state: food.food_state ?? 'raw' }])
+      fdcId: food.fdc_id, fdcState: foodState, state: foodState }])
     setOpenIngredient(index)
     setResult(null)
   }
@@ -344,7 +350,7 @@ export function App() {
       if (isCurrentRevision(submittedRevision, revision.current)) {
         setError(cause instanceof Error && cause.message === 'Failed to fetch'
           ? 'เชื่อมต่อเครื่องคำนวณไม่ได้ ตรวจว่า API ทำงานอยู่บนเครื่องนี้'
-          : cause instanceof Error ? cause.message : 'เกิดข้อผิดพลาด')
+          : cause instanceof Error ? calculationErrorMessages[cause.message] ?? cause.message : 'เกิดข้อผิดพลาด')
       }
     } finally { setBusy(false) }
   }
@@ -372,7 +378,7 @@ export function App() {
       {page === 'patients' && <ProfileManager />}
       {ingredientsVisited && <section hidden={page !== 'ingredients'} aria-labelledby="ingredients-title"><div className="page-intro"><h1 id="ingredients-title">วัตถุดิบและเครื่องปรุง</h1><p>การอ่านภาพและบันทึกยังเป็นการทดลอง ใช้ภาพทดสอบเท่านั้น</p></div><OcrPreview /><ManualIngredientForm /></section>}
       {page === 'recipes' && <section aria-labelledby="recipe-title">
-        <div className="page-intro"><h1 id="recipe-title">สูตรอาหาร</h1><p>เครื่องคำนวณทดลอง ยังไม่มีระบบบันทึกสูตร · USDA เป็นข้อมูลอาหารจริงสาธารณะ</p></div>
+        <div className="page-intro"><h1 id="recipe-title">สูตรอาหาร</h1><p>ยังไม่มีสูตรสำเร็จให้เลือกหรือปรับส่วนผสม · สร้างสูตรเองได้โดยเพิ่มวัตถุดิบด้านล่าง</p></div>
         <aside className="notice" role="note"><span className="notice-mark" aria-hidden="true">!</span><div><h2>ใช้ตัวเลขสมมติเท่านั้น</h2><p>ห้ามใช้ค่าจากฉลากอาหารจริงหรือข้อมูลผู้ป่วย ผลนี้ใช้ตัดสินใจด้านอาหารหรือการรักษาไม่ได้</p></div></aside>
         <form onSubmit={calculate} onInvalidCapture={event => {
           if (invalidHandled.current) return
@@ -400,7 +406,7 @@ export function App() {
           </section>
           <section className="usda-search" aria-label="แหล่งข้อมูลรอง USDA">
             <h2>แหล่งข้อมูลรอง: USDA FoodData Central</h2>
-            <p>ใช้เมื่อไม่มีรายการที่บันทึกไว้เท่านั้น · เป็นข้อมูลอ้างอิง USDA ภาษาอังกฤษ (Foundation / SR Legacy) ไม่ใช่การแปลหรือเทียบอาหารไทย · คำค้นจะถูกส่งไป USDA จึงห้ามใส่ชื่อผู้ป่วยหรือข้อมูลส่วนบุคคล</p>
+            <p>ค้นได้ทั้งวัตถุดิบและอาหารพร้อมรับประทานจาก USDA หมวด Foundation / SR Legacy · ไม่รวมรายการสินค้าแบรนด์ · ผลค้นเป็นข้อมูลของอาหารนั้น ไม่ใช่สูตรหรือรายการส่วนผสม · สูตรที่ทำเองให้เพิ่มวัตถุดิบทีละรายการด้านล่าง · เป็นข้อมูลภาษาอังกฤษ ไม่ใช่การแปลหรือเทียบอาหารไทย · คำค้นถูกส่งไป USDA จึงห้ามใส่ข้อมูลผู้ป่วย</p>
             <label>ชื่ออาหารหรือคำค้นภาษาไทยหรืออังกฤษ <input value={usdaQuery} onChange={e => updateUSDAQuery(e.target.value)} maxLength={200} autoComplete="off" /></label>
             <p className="local-translation-note">ส่งเฉพาะคำค้นไปยัง Ollama ที่ตั้งค่า loopback ในเครื่องนี้ · ใช้กับ daemon ที่เชื่อถือได้เท่านั้น · เมื่อยืนยันคำแปลอังกฤษ ระบบส่งข้อความนั้นไปค้น USDA · ห้ามใส่ข้อมูลผู้ป่วย</p>
             <button type="button" className="thai-query-choice" disabled={!normalizedUsdaQuery || translationBusy} onClick={() => void translateUSDAQuery()}>{translationBusy && translationBusyKey === 'query' ? 'กำลังแปลคำค้น…' : queryTranslationTarget === 'en' ? 'แปลคำค้นไทยเป็นอังกฤษผ่าน Ollama' : 'แปลคำค้นอังกฤษเป็นไทยผ่าน Ollama'}</button>
@@ -410,12 +416,13 @@ export function App() {
             {suggestedUsdaQuery && <div className="thai-query-suggestion" role="status"><span>คำค้นอังกฤษแนะนำสำหรับ “{normalizedUsdaQuery}”</span><strong>{suggestedUsdaQuery}</strong><small>คำแนะนำใช้ค้นหาเท่านั้น · ชื่อผลลัพธ์คงตาม USDA</small></div>}
             {broadThaiChoices && <div className="thai-query-suggestion" role="group" aria-label={`เลือกส่วนของอาหารสำหรับ ${normalizedUsdaQuery}`}><span>คำว่า “{normalizedUsdaQuery}” กว้างเกินไป · เลือกส่วนที่ต้องการค้นหา</span>{broadThaiChoices.map(choice => <button type="button" className="thai-query-choice" key={choice} aria-pressed={selectedThaiSearchChoice === choice} onClick={() => updateThaiSearchChoice(choice)}>{choice}</button>)}<small>{selectedThaiSearchChoice ? `เลือกคำค้น: ${selectedThaiSearchChoice}` : 'เลือกคำค้นก่อนค้นหา'} · ชื่อผลลัพธ์คงตาม USDA</small></div>}
             {unsupportedThaiQuery && <p className="thai-query-warning" role="note">ยังไม่มีคำค้นไทยที่ชัดเจนสำหรับคำนี้ · ลองระบุชนิดหรือส่วนอาหารให้ชัดขึ้น</p>}
-            <p>ตรวจชื่อ USDA และสภาพ “ดิบ” หรือ “สุก” ก่อนเพิ่ม · หากไม่ระบุสภาพ จะคำนวณไม่ได้</p>
+            <p>ค้นชื่ออาหารภาษาไทยหรืออังกฤษได้ · ตรวจชื่อและสภาพอาหารก่อนเลือก · รายการที่ระบบระบุสภาพดิบ/สุกไม่ได้จะยังเลือกคำนวณไม่ได้</p>
             <button type="button" className="add-button" disabled={usdaBusy || !usdaQuery.trim() || unsupportedThaiQuery || Boolean(broadThaiChoices && !selectedThaiSearchChoice)} onClick={() => void searchUSDA(selectedThaiSearchChoice || suggestedUsdaQuery || usdaQuery)}>{usdaBusy ? 'กำลังค้นหา…' : suggestedUsdaQuery || selectedThaiSearchChoice ? 'ค้นหา USDA ด้วยคำแนะนำ' : 'ค้นหา USDA'}</button>
             {usdaError && <p className="error" role="alert">{usdaError}</p>}
-            <ul className="usda-results">{usdaFoods.map(food => <li key={food.fdc_id}><strong>{food.description}</strong><span className="usda-food-state">สภาพอาหาร: {foodStateLabel(food.food_state)}</span><small>USDA FDC · รายการอ้างอิงไม่ใช่สินค้าแบรนด์ · {food.source_type} · {food.source_version ?? 'รุ่นข้อมูลไม่ระบุ'} · ID {food.fdc_id}</small>
+            <ul className="usda-results">{usdaFoods.map(food => { const supportedSource = food.source_type === 'Foundation' || food.source_type === 'SR Legacy'; return <li key={food.fdc_id}><strong>{food.description}</strong><span className="usda-food-state">สภาพอาหาร: {foodStateLabel(food.food_state)}</span><small>USDA FDC · รายการอ้างอิงไม่ใช่สินค้าแบรนด์ · {food.source_type} · {food.source_version ?? 'รุ่นข้อมูลไม่ระบุ'} · ID {food.fdc_id}</small>
               {translatedUSDAFoods[food.fdc_id]?.sourceText === food.description ? <div className="thai-query-suggestion" role="status"><span>คำแปลช่วยอ่านจาก Ollama</span><strong>{translatedUSDAFoods[food.fdc_id].translation}</strong><small>ชื่อ USDA และสภาพอาหารด้านบนเป็นข้อมูลต้นฉบับ · คำแปลนี้ไม่ยืนยันเอกลักษณ์ของอาหาร</small></div> : <button type="button" className="thai-query-choice" disabled={translationBusy} onClick={() => void translateUSDAFood(food)}>{translationBusy && translationBusyKey === String(food.fdc_id) ? 'กำลังแปลชื่อ…' : 'แปลชื่อ USDA เป็นไทยผ่าน Ollama'}</button>}
-              <button type="button" className="add-button" onClick={() => addUSDAFood(food)}>เพิ่มเป็นรายการใหม่</button></li>)}</ul>
+              <button type="button" className="add-button" disabled={!supportedSource || food.food_state === null} onClick={() => addUSDAFood(food)}>{!supportedSource ? 'เลือกไม่ได้ · หมวดนี้ยังไม่รองรับ' : food.food_state === null ? 'เลือกไม่ได้ · ระบุสภาพไม่ได้' : 'เลือกวัตถุดิบนี้'}</button>
+              {(!supportedSource || food.food_state === null) && <small className="usda-food-state" role="note">{!supportedSource ? 'ระบบนี้คำนวณได้เฉพาะ USDA Foundation / SR Legacy · ลองเลือกหมวดที่รองรับ หรือใช้วัตถุดิบที่บันทึกไว้' : 'ระบบไม่สามารถระบุจากรายการ USDA นี้ได้ว่าเป็นอาหารดิบหรือสุก จึงยังเลือกคำนวณไม่ได้ · ลองเลือกรายการที่ระบุการปรุงชัดเจน หรือใช้วัตถุดิบที่บันทึกไว้'}</small>}</li> })}</ul>
           </section>
           <section className="section-heading"><h2>รายการวัตถุดิบ</h2><button type="button" className="add-button" onClick={addIngredient}>＋ เพิ่มวัตถุดิบ</button></section>
           {ingredients.map((item, index) => <div className="ingredient-card" key={index}>
@@ -445,13 +452,13 @@ export function App() {
             </details>
             {ingredients.length > 1 && <button type="button" className="remove-button" aria-label={`ลบวัตถุดิบ ${index + 1}`} onClick={() => removeIngredient(index)}>ลบ</button>}
           </div>)}
-          <section className="portion-card"><label htmlFor="portion">สัดส่วนที่เสิร์ฟ</label><div><input id="portion" required inputMode="decimal" type="number" min="0.00000001" max="1" step="any" value={portion} onChange={e => { revision.current++; setPortion(e.target.value); setResult(null) }} /><span>ส่วนของสูตรทั้งหมด (0–1)</span></div></section>
+          <section className="portion-card"><label htmlFor="portion">สัดส่วนของสูตรที่รับประทาน</label><div><input id="portion" required inputMode="decimal" type="number" min="0.00000001" max="1" step="any" value={portion} onChange={e => { revision.current++; setPortion(e.target.value); setResult(null) }} /><span>0.5 = ครึ่งสูตร · 1 = สูตรทั้งหมด</span></div></section>
           <label className="attestation"><input type="checkbox" required /> ยืนยันว่ากำลังทดสอบด้วยสูตรสมมติ ไม่ใช่อาหารหรือข้อมูลผู้ป่วยจริง</label>
           <button className="submit-button" type="submit" disabled={busy}>{busy ? 'กำลังคำนวณ…' : 'คำนวณสารอาหาร'}</button>
         </form>
         {seasoningsError && <p className="error" role="status">{seasoningsError}</p>}
         {error && <p className="error" role="alert">{error}</p>}
-        {result && <section className="results" aria-live="polite" aria-labelledby="results-title"><div className="result-title"><h2 id="results-title">สารอาหารโดยประมาณ · {result.portion} ส่วน</h2><span className="status-pill">ไม่ใช่คำแนะนำทางการแพทย์</span></div>
+        {result && <section className="results" aria-live="polite" aria-labelledby="results-title"><div className="result-title"><h2 id="results-title">สารอาหารโดยประมาณ · {result.portion} ของสูตร</h2><span className="status-pill">ไม่ใช่คำแนะนำทางการแพทย์</span></div>
           <ul>{nutrients.map(([key, label, unit]) => { const total = result.totals[key]; return <li key={key}><span>{label}</span><strong>{total.value === null ? 'ไม่ทราบ' : `${total.value} ${unit}`}</strong><small>{total.complete ? 'ข้อมูลครบตามที่กรอก' : 'ข้อมูลไม่ครบ · มีรายการที่ไม่ทราบ'}</small></li> })}</ul>
           {result.sources?.map(source => <p className="footnote" key={source.source_id}>แหล่งข้อมูล USDA อ้างอิงไม่ใช่สินค้าแบรนด์: {source.source_id} · {source.description} · {source.source_type} · สภาพ {stateNames[source.food_state]} · รุ่น {source.source_version ?? 'ไม่ระบุ'}{source.energy_ambiguous ? ' · พลังงานมีหลายค่าขัดแย้ง จึงแสดงเป็นไม่ทราบ' : ''}</p>)}
           {result.saved_sources?.map(source => <p className="footnote" key={source.version_id}>รายการที่บันทึกในเครื่อง รุ่น {source.version_id}: {source.name} · {source.provider} · {source.source_version} · วันที่แหล่งข้อมูล {source.source_date ?? 'ไม่ระบุ'} · {source.provenance} · {source.source_reference} · บันทึก {source.retrieved_on} · สภาพ {stateNames[source.food_state]}</p>)}
