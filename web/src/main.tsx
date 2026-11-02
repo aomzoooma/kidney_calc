@@ -2,6 +2,7 @@ import { StrictMode, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { buildCalculationPayload, isCurrentRevision, nutrients, type FoodState, type Ingredient, type IngredientSource, type NutrientKey, type SavedIngredient, type SavedSeasoning } from './request'
 import { ManualIngredientForm } from './ManualIngredientForm'
+import { RecipeIngredientSnapshotForm } from './RecipeIngredientSnapshotForm'
 import { OcrPreview } from './OcrPreview'
 import { ProfileManager } from './ProfileManager'
 import './style.css'
@@ -28,7 +29,8 @@ type USDAIngredientPreview = {
   nutrients: Record<NutrientKey, string | null>; snapshot_digest: string;
 }
 const emptyValues = (): Ingredient['values'] => ({ energy_kcal: '', protein_g: '', sodium_mg: '', potassium_mg: '', phosphorus_mg: '' })
-const newIngredient = (): Ingredient => ({ name: '', amount: '', unit: 'g', state: 'raw', reference: '100', values: emptyValues(), source: 'manual', seasoningVersionId: null, ingredientVersionId: null, fdcId: null, fdcState: null })
+let ingredientRowSequence = 0
+const newIngredient = (): Ingredient => ({ rowId: `ingredient-row-${++ingredientRowSequence}`, name: '', amount: '', unit: 'g', state: 'raw', reference: '100', values: emptyValues(), source: 'manual', seasoningVersionId: null, ingredientVersionId: null, fdcId: null, fdcState: null })
 const stateNames: Record<FoodState, string> = { raw: 'ดิบ', cooked: 'สุก', as_sold: 'ตามสภาพที่ซื้อ' }
 const foodStateLabel = (state: FoodState | null) => state ? stateNames[state] : 'ระบบระบุสภาพดิบ/สุกไม่ได้ · ยังใช้คำนวณไม่ได้'
 const calculationErrorMessages: Record<string, string> = {
@@ -128,6 +130,7 @@ export function App() {
   const [recipeDraftChanged, setRecipeDraftChanged] = useState(false)
   const [recipeSaveBusy, setRecipeSaveBusy] = useState(false)
   const [recipeOpenBusyId, setRecipeOpenBusyId] = useState<number | null>(null)
+  const [manualSnapshotBusyIndex, setManualSnapshotBusyIndex] = useState<number | null>(null)
   const [recipeFavoriteBusyId, setRecipeFavoriteBusyId] = useState<number | null>(null)
   const [recipeStatus, setRecipeStatus] = useState('')
   const [recipeError, setRecipeError] = useState('')
@@ -214,7 +217,7 @@ export function App() {
   }
 
   function update(index: number, changes: Partial<Ingredient>) {
-    if (recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving) return
+    if (recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving) return
     revision.current++
     if (usdaReview?.index === index) clearUSDAReview()
     setRecipeDraftChanged(true)
@@ -224,7 +227,7 @@ export function App() {
   }
 
   function addIngredient() {
-    if (recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving) return
+    if (recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving) return
     revision.current++
     clearUSDAReview()
     setRecipeDraftChanged(true)
@@ -234,7 +237,7 @@ export function App() {
   }
 
   function removeIngredient(index: number) {
-    if (recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving) return
+    if (recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving) return
     revision.current++
     clearUSDAReview()
     setRecipeDraftChanged(true)
@@ -289,7 +292,7 @@ export function App() {
   }
 
   function addSavedIngredient(food: SavedIngredient) {
-    if (recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving) return
+    if (recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving) return
     revision.current++
     clearUSDAReview()
     setRecipeDraftChanged(true)
@@ -425,7 +428,7 @@ export function App() {
 
   function addUSDAFood(food: USDAFood) {
     const foodState = food.food_state
-    if (recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving || foodState === null || !['Foundation', 'SR Legacy'].includes(food.source_type)) return
+    if (recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving || foodState === null || !['Foundation', 'SR Legacy'].includes(food.source_type)) return
     revision.current++
     clearUSDAReview()
     setRecipeDraftChanged(true)
@@ -457,7 +460,7 @@ export function App() {
   }
 
   async function openSavedRecipe(recipeId: number) {
-    if (recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving) return
+    if (recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving) return
     if (recipeDraftChanged && !window.confirm('เปิดสูตรนี้จะแทนที่รายการและสัดส่วนที่กำลังกรอก หากยังไม่บันทึกให้กดยกเลิกก่อน')) return
     const requestRevision = revision.current
     setRecipeOpenBusyId(recipeId); setRecipeError(''); setRecipeStatus('')
@@ -490,7 +493,7 @@ export function App() {
   }
 
   async function saveRecipe() {
-    if (!canSaveRecipe || recipeSaveBusy || recipeOpenBusyId !== null || recipeFavoriteBusyId !== null) return
+    if (!canSaveRecipe || recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || recipeFavoriteBusyId !== null) return
     const name = recipeName.trim()
     const submittedRevision = revision.current
     const recipeIngredients = ingredients.map(item => ({
@@ -558,7 +561,7 @@ export function App() {
   }
 
   function startNewRecipe() {
-    if (recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving) return
+    if (recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving) return
     if (recipeDraftChanged && !window.confirm('เริ่มสูตรใหม่จะล้างรายการและสัดส่วนที่กำลังกรอก หากยังไม่บันทึกให้กดยกเลิกก่อน')) return
     revision.current++
     setIngredients([newIngredient()]); setRecipeName(''); setSavedRecipeId(null); setSavedRecipeName(null)
@@ -567,7 +570,7 @@ export function App() {
   }
 
   async function toggleSavedRecipeFavorite(recipe: SavedRecipeSummary) {
-    if (recipeSaveBusy || recipeFavoriteBusyId !== null || recipeOpenBusyId !== null) return
+    if (recipeSaveBusy || recipeFavoriteBusyId !== null || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null) return
     setRecipeFavoriteBusyId(recipe.id); setRecipeError(''); setRecipeStatus('')
     try {
       const favorite = !recipe.favorite
@@ -587,7 +590,7 @@ export function App() {
   }
 
   async function previewUSDAIngredient(index: number) {
-    if (recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving) return
+    if (recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving) return
     const ingredient = ingredientsRef.current[index]
     if (ingredient?.source !== 'usda' || ingredient.fdcId === null) return
     const fdcId = ingredient.fdcId
@@ -663,6 +666,7 @@ export function App() {
 
   async function calculate(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (manualSnapshotBusyIndex !== null) return
     setBusy(true); setError(''); setResult(null)
     const submittedRevision = ++revision.current
     try {
@@ -711,14 +715,14 @@ export function App() {
         <section className="usda-search" aria-labelledby="saved-recipes-title">
           <h2 id="saved-recipes-title">สูตรที่บันทึกไว้</h2>
           <p>เปิดสูตรเพื่อแก้ส่วนผสม คำนวณใหม่ หรือทำเครื่องหมายรายการโปรด · บันทึกได้เมื่อทุกส่วนผสมใช้วัตถุดิบที่บันทึกและตรวจแล้วในเครื่อง</p>
-          <button type="button" className="add-button" disabled={recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving === true} onClick={startNewRecipe}>เริ่มสูตรใหม่</button>
+          <button type="button" className="add-button" disabled={recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving === true} onClick={startNewRecipe}>เริ่มสูตรใหม่</button>
           {savedRecipesBusy && <p role="status" aria-live="polite">กำลังโหลดสูตรที่บันทึกไว้…</p>}
           {savedRecipesError && <p className="error" role="status">{savedRecipesError} <button type="button" className="thai-query-choice" onClick={() => void loadSavedRecipes()}>โหลดอีกครั้ง</button></p>}
           {!savedRecipesBusy && !savedRecipesError && savedRecipes.length === 0 && <p>ยังไม่มีสูตรที่บันทึกไว้ · เพิ่มวัตถุดิบรุ่นที่ตรวจแล้ว ตั้งชื่อสูตร แล้วบันทึกด้านล่าง</p>}
           <ul className="usda-results">{savedRecipes.map(recipe => <li key={recipe.id}>
             <strong>{recipe.name}</strong><small>{recipe.favorite ? 'อยู่ในรายการโปรด' : 'สูตรที่บันทึกไว้ในเครื่อง'}</small>
-            <button type="button" className="add-button" disabled={recipeOpenBusyId !== null || recipeSaveBusy || usdaReview?.saving === true} onClick={() => void openSavedRecipe(recipe.id)}>{recipeOpenBusyId === recipe.id ? 'กำลังเปิด…' : 'เปิดสูตรนี้'}</button>
-            <button type="button" className="thai-query-choice" aria-pressed={recipe.favorite} disabled={recipeFavoriteBusyId !== null || recipeSaveBusy || recipeOpenBusyId !== null} onClick={() => void toggleSavedRecipeFavorite(recipe)}>{recipeFavoriteBusyId === recipe.id ? 'กำลังบันทึก…' : recipe.favorite ? 'นำออกจากรายการโปรด' : 'เพิ่มในรายการโปรด'}</button>
+            <button type="button" className="add-button" disabled={recipeOpenBusyId !== null || recipeSaveBusy || manualSnapshotBusyIndex !== null || usdaReview?.saving === true} onClick={() => void openSavedRecipe(recipe.id)}>{recipeOpenBusyId === recipe.id ? 'กำลังเปิด…' : 'เปิดสูตรนี้'}</button>
+            <button type="button" className="thai-query-choice" aria-pressed={recipe.favorite} disabled={recipeFavoriteBusyId !== null || recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null} onClick={() => void toggleSavedRecipeFavorite(recipe)}>{recipeFavoriteBusyId === recipe.id ? 'กำลังบันทึก…' : recipe.favorite ? 'นำออกจากรายการโปรด' : 'เพิ่มในรายการโปรด'}</button>
           </li>)}</ul>
         </section>
         <form onSubmit={calculate} onInvalidCapture={event => {
@@ -743,7 +747,7 @@ export function App() {
             <button type="button" className="add-button" disabled={savedSearchBusy || !savedQuery.trim()} onClick={() => void searchSavedIngredients()}>{savedSearchBusy ? 'กำลังค้นหา…' : 'ค้นหารายการในเครื่อง'}</button>
             {savedSearchError && <p className="error" role="alert">{savedSearchError}</p>}
             <ul className="usda-results">{savedIngredients.map(food => <li key={food.version_id}><strong>{food.name}{food.brand ? ` · ${food.brand}` : ''}</strong><small>รุ่นที่บันทึกไว้ · {food.provider} · {food.source_version} · วันที่แหล่งข้อมูล {food.source_date ?? 'ไม่ระบุ'} · {food.provenance} · สภาพ {stateNames[food.food_state]} · ฐาน {food.basis_quantity} {food.basis_unit === 'g' ? 'กรัม' : 'มล.'} · บันทึก {food.retrieved_on} · {food.source_reference} · รุ่น {food.version_id}</small>
-              <button type="button" className="add-button" disabled={recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving === true} onClick={() => addSavedIngredient(food)}>เลือกเป็นรายการใหม่</button></li>)}</ul>
+              <button type="button" className="add-button" disabled={recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving === true} onClick={() => addSavedIngredient(food)}>เลือกเป็นรายการใหม่</button></li>)}</ul>
           </section>
           <section className="usda-search" aria-label="แหล่งข้อมูลรอง USDA">
             <h2>แหล่งข้อมูลรอง: USDA FoodData Central</h2>
@@ -762,17 +766,17 @@ export function App() {
             {usdaError && <p className="error" role="alert">{usdaError}</p>}
             <ul className="usda-results">{usdaFoods.map(food => { const supportedSource = food.source_type === 'Foundation' || food.source_type === 'SR Legacy'; return <li key={food.fdc_id}><strong>{food.description}</strong><span className="usda-food-state">สภาพอาหาร: {foodStateLabel(food.food_state)}</span><small>USDA FDC · รายการอ้างอิงไม่ใช่สินค้าแบรนด์ · {food.source_type} · {food.source_version ?? 'รุ่นข้อมูลไม่ระบุ'} · ID {food.fdc_id}</small>
               {translatedUSDAFoods[food.fdc_id]?.sourceText === food.description ? <div className="thai-query-suggestion" role="status"><span>คำแปลช่วยอ่านจาก Ollama</span><strong>{translatedUSDAFoods[food.fdc_id].translation}</strong><small>ชื่อ USDA และสภาพอาหารด้านบนเป็นข้อมูลต้นฉบับ · คำแปลนี้ไม่ยืนยันเอกลักษณ์ของอาหาร</small></div> : <button type="button" className="thai-query-choice" disabled={translationBusy} onClick={() => void translateUSDAFood(food)}>{translationBusy && translationBusyKey === String(food.fdc_id) ? 'กำลังแปลชื่อ…' : 'แปลชื่อ USDA เป็นไทยผ่าน Ollama'}</button>}
-              <button type="button" className="add-button" disabled={recipeSaveBusy || usdaReview?.saving === true || !supportedSource || food.food_state === null} onClick={() => addUSDAFood(food)}>{!supportedSource ? 'เลือกไม่ได้ · หมวดนี้ยังไม่รองรับ' : food.food_state === null ? 'เลือกไม่ได้ · ระบุสภาพไม่ได้' : 'เลือกวัตถุดิบนี้'}</button>
+              <button type="button" className="add-button" disabled={recipeSaveBusy || manualSnapshotBusyIndex !== null || usdaReview?.saving === true || !supportedSource || food.food_state === null} onClick={() => addUSDAFood(food)}>{!supportedSource ? 'เลือกไม่ได้ · หมวดนี้ยังไม่รองรับ' : food.food_state === null ? 'เลือกไม่ได้ · ระบุสภาพไม่ได้' : 'เลือกวัตถุดิบนี้'}</button>
               {(!supportedSource || food.food_state === null) && <small className="usda-food-state" role="note">{!supportedSource ? 'ระบบนี้คำนวณได้เฉพาะ USDA Foundation / SR Legacy · ลองเลือกหมวดที่รองรับ หรือใช้วัตถุดิบที่บันทึกไว้' : 'ระบบไม่สามารถระบุจากรายการ USDA นี้ได้ว่าเป็นอาหารดิบหรือสุก จึงยังเลือกคำนวณไม่ได้ · ลองเลือกรายการที่ระบุการปรุงชัดเจน หรือใช้วัตถุดิบที่บันทึกไว้'}</small>}</li> })}</ul>
           </section>
-          <section className="section-heading"><h2>รายการวัตถุดิบ</h2><button type="button" className="add-button" disabled={recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving === true} onClick={addIngredient}>＋ เพิ่มวัตถุดิบ</button></section>
-          {ingredients.map((item, index) => <div className="ingredient-card" key={index}>
+          <section className="section-heading"><h2>รายการวัตถุดิบ</h2><button type="button" className="add-button" disabled={recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving === true} onClick={addIngredient}>＋ เพิ่มวัตถุดิบ</button></section>
+          {ingredients.map((item, index) => <div className="ingredient-card" key={item.rowId}>
             <details className="ingredient-details" data-ingredient-index={index} open={openIngredient === index}>
               <summary className="ingredient-summary" onClick={event => {
                 event.preventDefault()
-                if (!recipeSaveBusy && recipeOpenBusyId === null && !usdaReview?.saving) setOpenIngredient(current => current === index ? -1 : index)
+                if (!recipeSaveBusy && recipeOpenBusyId === null && manualSnapshotBusyIndex === null && !usdaReview?.saving) setOpenIngredient(current => current === index ? -1 : index)
               }}><span>{item.name.trim() || `วัตถุดิบ ${index + 1}`}</span><span>{item.amount ? `${item.amount} ${item.unit === 'g' ? 'กรัม' : 'มล.'}` : 'ยังไม่ระบุปริมาณ'}</span></summary>
-              <fieldset className="ingredient-fields" disabled={recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving === true}>
+              <fieldset className="ingredient-fields" disabled={recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving === true}>
             <legend className="visually-hidden">วัตถุดิบ {index + 1}</legend>
             <label>แหล่งข้อมูล <select aria-label={`แหล่งข้อมูลวัตถุดิบ ${index + 1}`} value={item.source} onChange={e => selectSource(index, e.target.value as IngredientSource)}><option value="manual">กรอกข้อมูลเอง</option><option value="usda">USDA รายการอ้างอิง · แหล่งรอง</option><option value="seasoning">เครื่องปรุงที่บันทึกไว้</option><option value="saved" disabled>วัตถุดิบที่บันทึกไว้ · รุ่นที่เลือก</option></select></label>
             {item.source === 'seasoning' && <label>เลือกเครื่องปรุงที่บันทึกไว้ <select value={item.seasoningVersionId ?? ''} onChange={e => selectSeasoning(index, e.target.value)}><option value="">เลือกเครื่องปรุง</option>{savedSeasonings.map(seasoning => <option key={seasoning.version_id} value={seasoning.version_id}>{seasoning.name}{seasoning.brand ? ` · ${seasoning.brand}` : ''} (รุ่น {seasoning.version_id})</option>)}</select></label>}
@@ -793,32 +797,47 @@ export function App() {
             </div>}
             {item.source === 'usda' && item.fdcId === null && <p className="footnote">ค้นหาอาหารด้านบน แล้วกด “เพิ่มเป็นรายการใหม่” เพื่อเพิ่มรายการ USDA แยกต่างหาก</p>}
             <div className="field-grid">
-              <label>ปริมาณที่ใช้ <span className="input-unit"><input required inputMode="decimal" type="number" min="0.00000001" step="any" value={item.amount} onChange={e => update(index, { amount: e.target.value })} placeholder="เช่น 150" /><select aria-label="หน่วยปริมาณ" value={item.unit} disabled={item.source !== 'manual'} onChange={e => update(index, { unit: e.target.value as Ingredient['unit'] })}><option value="g">กรัม</option><option value="ml">มล.</option></select></span></label>
+              <label>ปริมาณที่ใช้ <span className="input-unit"><input aria-label="ปริมาณที่ใช้ในสูตร" required inputMode="decimal" type="number" min="0.00000001" step="any" value={item.amount} onChange={e => update(index, { amount: e.target.value })} placeholder="เช่น 150" /><select aria-label="หน่วยปริมาณ" value={item.unit} disabled={item.source !== 'manual'} onChange={e => update(index, { unit: e.target.value as Ingredient['unit'] })}><option value="g">กรัม</option><option value="ml">มล.</option></select></span></label>
               <label>สภาพอาหาร {item.fdcId !== null ? <span>{foodStateLabel(item.fdcState)}</span> : <select value={item.state} disabled={item.seasoningVersionId !== null || item.ingredientVersionId !== null} onChange={e => update(index, { state: e.target.value as FoodState })}>{Object.entries(stateNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>}</label>
             </div>
-            {item.source !== 'usda' && <label>ข้อมูลสารอาหารต่อ <span className="inline-input"><input required inputMode="decimal" type="number" min="0.00000001" step="any" value={item.reference} readOnly={item.source === 'seasoning' || item.source === 'saved'} onChange={e => update(index, { reference: e.target.value })} /><span>{item.unit === 'g' ? 'กรัม' : 'มล.'} (หน่วยเดียวกับปริมาณที่ใช้)</span></span></label>}
-            {item.source === 'manual' && <div className="nutrient-grid"><p className="subheading">สารอาหารในปริมาณอ้างอิง <span>เว้นว่างได้เมื่อไม่ทราบ</span></p>
+            {item.source !== 'usda' && <label>ข้อมูลสารอาหารต่อ <span className="inline-input"><input aria-label="ปริมาณฐานสารอาหาร" required inputMode="decimal" type="number" min="0.00000001" step="any" value={item.reference} readOnly={item.source === 'seasoning' || item.source === 'saved'} onChange={e => update(index, { reference: e.target.value })} /><span>{item.unit === 'g' ? 'กรัม' : 'มล.'} (หน่วยเดียวกับปริมาณที่ใช้)</span></span></label>}
+            {item.source === 'manual' && <div className="nutrient-grid"><p className="subheading">สารอาหารในปริมาณอ้างอิง <span>เว้นว่างเมื่อไม่ทราบ · ระบบจะคงเป็น “ไม่ทราบ”</span></p>
               {nutrients.map(([key, label, unit]) => <label key={key}>{label} <span className="nutrient-unit"><input inputMode="decimal" type="number" min="0" step="any" value={item.values[key]} readOnly={item.seasoningVersionId !== null} onChange={e => update(index, { values: { ...item.values, [key]: e.target.value } })} placeholder="ไม่ทราบ" /><span>{unit}</span></span></label>)}
             </div>}
+            {item.source === 'manual' && <RecipeIngredientSnapshotForm ingredient={item}
+              disabled={manualSnapshotBusyIndex !== null}
+              onBusyChange={isBusy => setManualSnapshotBusyIndex(isBusy ? index : null)}
+              onSaved={versionId => {
+                if (ingredientsRef.current[index] !== item || ingredientsRef.current[index]?.source !== 'manual') {
+                  setRecipeStatus('บันทึกวัตถุดิบในเครื่องแล้ว แต่แถวสูตรเปลี่ยนไป · ค้นหารุ่นที่บันทึกไว้แล้วเลือกเพิ่มอีกครั้ง')
+                  return
+                }
+                revision.current++
+                setIngredients(current => current.map((currentItem, currentIndex) => currentIndex === index && currentItem === item
+                  ? { ...currentItem, source: 'saved', ingredientVersionId: versionId }
+                  : currentItem))
+                setRecipeDraftChanged(true); setResult(null); setRecipeError('')
+                setRecipeStatus(`บันทึกวัตถุดิบนี้ในเครื่องแล้ว · รุ่น ${versionId} · ปริมาณและข้อมูลในสูตรยังคงเดิม`)
+              }} />}
               </fieldset>
             </details>
-            {ingredients.length > 1 && <button type="button" className="remove-button" disabled={recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving === true} aria-label={`ลบวัตถุดิบ ${index + 1}`} onClick={() => removeIngredient(index)}>ลบ</button>}
+            {ingredients.length > 1 && <button type="button" className="remove-button" disabled={recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving === true} aria-label={`ลบวัตถุดิบ ${index + 1}`} onClick={() => removeIngredient(index)}>ลบ</button>}
           </div>)}
           <section className="usda-search" aria-labelledby="save-recipe-title">
             <h2 id="save-recipe-title">บันทึกสูตรของฉัน</h2>
             {savedRecipeId !== null && <p>กำลังแก้สูตรที่บันทึกไว้ · การแก้ไขในหน้านี้ยังไม่ถูกบันทึก</p>}
-            <label htmlFor="recipe-name">ชื่อสูตร <input id="recipe-name" disabled={recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving === true} value={recipeName} maxLength={150} autoComplete="off" onChange={event => {
-              if (recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving) return
+            <label htmlFor="recipe-name">ชื่อสูตร <input id="recipe-name" disabled={recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving === true} value={recipeName} maxLength={150} autoComplete="off" onChange={event => {
+              if (recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving) return
               revision.current++; setRecipeName(event.target.value); setRecipeDraftChanged(true); setRecipeStatus(''); setRecipeError('')
             }} /></label>
             {!recipeUsesReviewedIngredients && <p role="note">บันทึกสูตรได้เมื่อทุกรายการเป็นวัตถุดิบหรือเครื่องปรุงที่บันทึกและตรวจแล้ว · รายการกรอกเองยังบันทึกเป็นสูตรไม่ได้ ส่วน USDA ต้องตรวจและบันทึกเป็นรายการในเครื่องก่อน · แบบร่างยังอยู่และคำนวณต่อได้</p>}
             {recipeUsesReviewedIngredients && !recipeAmountsValid && <p role="note">กรอกปริมาณที่มากกว่าศูนย์ในทุกวัตถุดิบก่อนบันทึก</p>}
             {recipeUsesReviewedIngredients && recipeAmountsValid && !recipeName.trim() && <p role="note">ใส่ชื่อสูตรก่อนบันทึก</p>}
-            <button type="button" className="submit-button" disabled={!canSaveRecipe || recipeSaveBusy || recipeOpenBusyId !== null || recipeFavoriteBusyId !== null || usdaReview?.saving === true} onClick={() => void saveRecipe()}>{recipeSaveBusy ? 'กำลังบันทึก…' : savedRecipeId === null ? 'บันทึกสูตร' : 'บันทึกการเปลี่ยนแปลง'}</button>
+            <button type="button" className="submit-button" disabled={!canSaveRecipe || recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || recipeFavoriteBusyId !== null || usdaReview?.saving === true} onClick={() => void saveRecipe()}>{recipeSaveBusy ? 'กำลังบันทึก…' : savedRecipeId === null ? 'บันทึกสูตร' : 'บันทึกการเปลี่ยนแปลง'}</button>
           </section>
-          <section className="portion-card"><label htmlFor="portion">สัดส่วนของสูตรที่รับประทาน</label><div><input id="portion" disabled={recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving === true} required inputMode="decimal" type="number" min="0.00000001" max="1" step="any" value={portion} onChange={e => { if (recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving) return; revision.current++; setRecipeDraftChanged(true); setPortion(e.target.value); setResult(null) }} /><span>0.5 = ครึ่งสูตร · 1 = สูตรทั้งหมด</span></div></section>
+          <section className="portion-card"><label htmlFor="portion">สัดส่วนของสูตรที่รับประทาน</label><div><input id="portion" disabled={recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving === true} required inputMode="decimal" type="number" min="0.00000001" max="1" step="any" value={portion} onChange={e => { if (recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving) return; revision.current++; setRecipeDraftChanged(true); setPortion(e.target.value); setResult(null) }} /><span>0.5 = ครึ่งสูตร · 1 = สูตรทั้งหมด</span></div></section>
           <label className="attestation"><input type="checkbox" required /> ยืนยันว่ากำลังทดสอบด้วยสูตรสมมติ ไม่ใช่อาหารหรือข้อมูลผู้ป่วยจริง</label>
-          <button className="submit-button" type="submit" disabled={busy || recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving === true}>{busy ? 'กำลังคำนวณ…' : 'คำนวณสารอาหาร'}</button>
+          <button className="submit-button" type="submit" disabled={busy || recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving === true}>{busy ? 'กำลังคำนวณ…' : 'คำนวณสารอาหาร'}</button>
         </form>
         {recipeStatus && <p className="status-line" role="status" aria-live="polite">{recipeStatus}</p>}
         {recipeError && <p className="error" role="alert">{recipeError}</p>}

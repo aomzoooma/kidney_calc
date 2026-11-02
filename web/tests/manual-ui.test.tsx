@@ -66,6 +66,139 @@ describe('manual recipe UI', () => {
     expect(fetchMock.mock.calls.some(([url]) => url === '/experimental/recipes/calculate')).toBe(false)
   })
 
+  it('reviews a manual recipe row before saving its exact basis and then saves the recipe by immutable ID', async () => {
+    const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/experimental/ingredients' && options?.method === 'POST') return { ok: true, json: async () => ({ ingredient_id: 8, version_id: 55 }) }
+      if (url === '/experimental/recipes' && options?.method === 'POST') return { ok: true, json: async () => ({ id: 77, name: 'ข้าวตุ๋นสมมติ' }) }
+      if (url === '/experimental/recipes') return { ok: true, json: async () => ({ items: [] }) }
+      if (url === '/experimental/seasonings') return { ok: true, json: async () => ({ items: [] }) }
+      return { ok: true, json: async () => response }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    const row = document.querySelector('[data-ingredient-index="0"]')!
+    fireEvent.change(within(row).getByLabelText('ชื่อวัตถุดิบ'), { target: { value: 'ถั่วสมมติ' } })
+    fireEvent.change(within(row).getByLabelText('ปริมาณที่ใช้ในสูตร'), { target: { value: '12' } })
+    fireEvent.change(within(row).getByLabelText(/หน่วยปริมาณ/), { target: { value: 'ml' } })
+    fireEvent.change(within(row).getByLabelText(/สภาพอาหาร/), { target: { value: 'as_sold' } })
+    fireEvent.change(within(row).getByLabelText('ปริมาณฐานสารอาหาร'), { target: { value: '30' } })
+    const nutrientInputs = row.querySelectorAll<HTMLInputElement>('.nutrient-grid input')
+    fireEvent.change(nutrientInputs[1], { target: { value: '2.5' } })
+    fireEvent.change(nutrientInputs[2], { target: { value: '0' } })
+    fireEvent.change(within(row).getByLabelText('แหล่งข้อมูล / ผู้เผยแพร่'), { target: { value: 'ผู้ใช้ระบุจากตัวอย่าง' } })
+    fireEvent.change(within(row).getByLabelText('รุ่นหรือฉบับของแหล่งข้อมูล'), { target: { value: 'fixture-v1' } })
+    fireEvent.change(within(row).getByLabelText('วันที่ของแหล่งข้อมูล (ถ้าระบุ)'), { target: { value: '2026-01-02' } })
+    fireEvent.change(within(row).getByLabelText('ตำแหน่งอ้างอิง เช่น หน้าเอกสารหรือ URL'), { target: { value: 'synthetic page 4' } })
+    fireEvent.change(within(row).getByLabelText('วิธีได้มาของข้อมูล'), { target: { value: 'คัดจากตัวอย่างสมมติ' } })
+    const review = within(row).getByRole('checkbox', { name: /ยืนยันว่าเป็นข้อมูลสมมติ/ })
+    expect((within(row).getByRole('button', { name: 'ตรวจแล้ว · บันทึกวัตถุดิบในเครื่อง' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(review)
+    expect((review as HTMLInputElement).checked).toBe(true)
+    fireEvent.change(nutrientInputs[2], { target: { value: '0.5' } })
+    expect((review as HTMLInputElement).checked).toBe(false)
+    fireEvent.click(review)
+    fireEvent.change(within(row).getByLabelText('วิธีได้มาของข้อมูล'), { target: { value: 'ปรับปรุงจากตัวอย่างสมมติ' } })
+    expect((review as HTMLInputElement).checked).toBe(false)
+    fireEvent.click(review)
+    fireEvent.click(within(row).getByRole('button', { name: 'ตรวจแล้ว · บันทึกวัตถุดิบในเครื่อง' }))
+    await screen.findByText(/บันทึกวัตถุดิบนี้ในเครื่องแล้ว · รุ่น 55/)
+
+    const ingredientCall = fetchMock.mock.calls.find(([url, options]) => url === '/experimental/ingredients' && options?.method === 'POST')
+    expect(JSON.parse(String(ingredientCall?.[1]?.body))).toEqual({
+      synthetic_only: true, reviewed: true, name: 'ถั่วสมมติ', provider: 'ผู้ใช้ระบุจากตัวอย่าง',
+      source_version: 'fixture-v1', source_date: '2026-01-02', source_reference: 'synthetic page 4',
+      provenance: 'ปรับปรุงจากตัวอย่างสมมติ', basis_quantity: '30', basis_unit: 'ml', food_state: 'as_sold',
+      nutrients: { energy_kcal: null, protein_g: '2.5', sodium_mg: '0.5', potassium_mg: null, phosphorus_mg: null },
+    })
+    expect((within(row).getByLabelText('แหล่งข้อมูลวัตถุดิบ 1') as HTMLSelectElement).value).toBe('saved')
+    expect((within(row).getByLabelText('ปริมาณที่ใช้ในสูตร') as HTMLInputElement).value).toBe('12')
+    expect((within(row).getByLabelText('ปริมาณฐานสารอาหาร') as HTMLInputElement).value).toBe('30')
+
+    fireEvent.change(screen.getByLabelText('ชื่อสูตร'), { target: { value: 'ข้าวตุ๋นสมมติ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกสูตร' }))
+    await screen.findByText('บันทึกสูตร “ข้าวตุ๋นสมมติ” แล้ว')
+    const recipeCall = fetchMock.mock.calls.find(([url, options]) => url === '/experimental/recipes' && options?.method === 'POST')
+    expect(JSON.parse(String(recipeCall?.[1]?.body))).toEqual({ synthetic_only: true, name: 'ข้าวตุ๋นสมมติ', ingredients: [
+      { ingredient_version_id: 55, amount: '12', unit: 'ml', food_state: 'as_sold' },
+    ] })
+  })
+
+  it('keeps the manual ingredient draft after save failure and locks row identity while saving', async () => {
+    let rejectSnapshot!: (reason?: unknown) => void
+    const pendingSnapshot = new Promise<{ ok: boolean; json: () => Promise<{ detail?: string }> }>((_resolve, reject) => { rejectSnapshot = reject })
+    const fetchMock = vi.fn((url: string, options?: RequestInit) => {
+      if (url === '/experimental/ingredients' && options?.method === 'POST') return pendingSnapshot
+      if (url === '/experimental/recipes') return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+      if (url === '/experimental/seasonings') return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+      return Promise.resolve({ ok: true, json: async () => response })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getByLabelText('ชื่อวัตถุดิบ'), { target: { value: 'ผักสมมติ' } })
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มวัตถุดิบ/ }))
+    const first = document.querySelector('[data-ingredient-index="0"]')!
+    fireEvent.click(first.querySelector('summary')!)
+    fireEvent.change(within(first).getByLabelText('แหล่งข้อมูล / ผู้เผยแพร่'), { target: { value: 'fixture source' } })
+    fireEvent.change(within(first).getByLabelText('รุ่นหรือฉบับของแหล่งข้อมูล'), { target: { value: 'v1' } })
+    fireEvent.change(within(first).getByLabelText('ตำแหน่งอ้างอิง เช่น หน้าเอกสารหรือ URL'), { target: { value: 'fixture reference' } })
+    fireEvent.change(within(first).getByLabelText('วิธีได้มาของข้อมูล'), { target: { value: 'fixture transcription' } })
+    fireEvent.click(within(first).getByRole('checkbox', { name: /ยืนยันว่าเป็นข้อมูลสมมติ/ }))
+    fireEvent.click(within(first).getByRole('button', { name: 'ตรวจแล้ว · บันทึกวัตถุดิบในเครื่อง' }))
+    const secondName = document.querySelector<HTMLInputElement>('[data-ingredient-index="1"] input[autocomplete="off"]')!
+    expect((screen.getByRole('button', { name: /เพิ่มวัตถุดิบ/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'ลบวัตถุดิบ 2' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(secondName.matches(':disabled')).toBe(true)
+    fireEvent.change(secondName, { target: { value: 'พยายามเปลี่ยนแถวระหว่างบันทึก' } })
+    expect(secondName.value).toBe('')
+    await act(async () => { rejectSnapshot(new TypeError('Failed to fetch')); await pendingSnapshot.catch(() => undefined) })
+    expect(await screen.findByText(/อาจบันทึกสำเร็จแล้ว/)).toBeTruthy()
+    expect((within(first).getByLabelText('ชื่อวัตถุดิบ') as HTMLInputElement).value).toBe('ผักสมมติ')
+    expect((within(first).getByLabelText('แหล่งข้อมูล \/ ผู้เผยแพร่') as HTMLInputElement).value).toBe('fixture source')
+    expect((within(first).getByLabelText('ปริมาณที่ใช้ในสูตร') as HTMLInputElement).value).toBe('')
+    expect((within(first).getByLabelText('แหล่งข้อมูลวัตถุดิบ 1') as HTMLSelectElement).value).toBe('manual')
+    expect(fetchMock.mock.calls.some(([url, options]) => url === '/experimental/recipes' && options?.method === 'POST')).toBe(false)
+  })
+
+  it('keeps manual snapshot provenance with its ingredient when an earlier row is removed', async () => {
+    const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/experimental/ingredients' && options?.method === 'POST') return { ok: true, json: async () => ({ ingredient_id: 9, version_id: 91 }) }
+      if (url === '/experimental/recipes') return { ok: true, json: async () => ({ items: [] }) }
+      if (url === '/experimental/seasonings') return { ok: true, json: async () => ({ items: [] }) }
+      return { ok: true, json: async () => response }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    const first = document.querySelector('[data-ingredient-index="0"]')!
+    fireEvent.change(within(first).getByLabelText('ชื่อวัตถุดิบ'), { target: { value: 'วัตถุดิบ A' } })
+    fireEvent.change(within(first).getByLabelText('แหล่งข้อมูล / ผู้เผยแพร่'), { target: { value: 'source A' } })
+    fireEvent.change(within(first).getByLabelText('รุ่นหรือฉบับของแหล่งข้อมูล'), { target: { value: 'version A' } })
+    fireEvent.change(within(first).getByLabelText('ตำแหน่งอ้างอิง เช่น หน้าเอกสารหรือ URL'), { target: { value: 'reference A' } })
+    fireEvent.change(within(first).getByLabelText('วิธีได้มาของข้อมูล'), { target: { value: 'provenance A' } })
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มวัตถุดิบ/ }))
+    const second = document.querySelector('[data-ingredient-index="1"]')!
+    fireEvent.change(within(second).getByLabelText('ชื่อวัตถุดิบ'), { target: { value: 'วัตถุดิบ B' } })
+    fireEvent.change(within(second).getByLabelText('แหล่งข้อมูล / ผู้เผยแพร่'), { target: { value: 'source B' } })
+    fireEvent.change(within(second).getByLabelText('รุ่นหรือฉบับของแหล่งข้อมูล'), { target: { value: 'version B' } })
+    fireEvent.change(within(second).getByLabelText('ตำแหน่งอ้างอิง เช่น หน้าเอกสารหรือ URL'), { target: { value: 'reference B' } })
+    fireEvent.change(within(second).getByLabelText('วิธีได้มาของข้อมูล'), { target: { value: 'provenance B' } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'ลบวัตถุดิบ 1' }))
+    const remaining = document.querySelector('[data-ingredient-index="0"]')!
+    expect((within(remaining).getByLabelText('ชื่อวัตถุดิบ') as HTMLInputElement).value).toBe('วัตถุดิบ B')
+    expect((within(remaining).getByLabelText('แหล่งข้อมูล / ผู้เผยแพร่') as HTMLInputElement).value).toBe('source B')
+    fireEvent.click(within(remaining).getByRole('checkbox', { name: /ยืนยันว่าเป็นข้อมูลสมมติ/ }))
+    fireEvent.click(within(remaining).getByRole('button', { name: 'ตรวจแล้ว · บันทึกวัตถุดิบในเครื่อง' }))
+    await screen.findByText(/บันทึกวัตถุดิบนี้ในเครื่องแล้ว · รุ่น 91/)
+    const snapshotCall = fetchMock.mock.calls.find(([url, options]) => url === '/experimental/ingredients' && options?.method === 'POST')
+    expect(JSON.parse(String(snapshotCall?.[1]?.body))).toMatchObject({
+      name: 'วัตถุดิบ B', provider: 'source B', source_version: 'version B', source_reference: 'reference B', provenance: 'provenance B',
+    })
+    expect(JSON.parse(String(snapshotCall?.[1]?.body))).not.toMatchObject({ provider: 'source A', source_reference: 'reference A', provenance: 'provenance A' })
+  })
+
   it('saves a custom recipe from reviewed local ingredient versions only', async () => {
     const saved = { ingredient_id: 8, version_id: 24, name: 'ข้าวสวย', brand: null, version: '1',
       provider: 'Synthetic provider', source_version: 'fixture-v1', source_date: null, retrieved_on: '2026-11-03',
