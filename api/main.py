@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 from decimal import Decimal, DecimalException, InvalidOperation
 from typing import Annotated, Literal, Optional
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, ValidationError
 
 from nutrition.calculator import NUTRIENTS, Measure, NutrientSource, calculate
+from api.ocr import MAX_IMAGE_BYTES, OCRServiceError, ocr_image
 
 
 def _json_decimal(value):
@@ -57,6 +61,14 @@ class RecipeInput(BaseModel):
     ingredients: list[IngredientInput] = Field(min_length=1, max_length=100)
 
 
+class OCRInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    synthetic_only: Literal[True]
+    content_type: Literal["image/png", "image/jpeg"]
+    image_base64: str = Field(min_length=1, max_length=4 * ((MAX_IMAGE_BYTES + 2) // 3))
+
+
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
 
@@ -97,6 +109,24 @@ async def localhost_only(request: Request, call_next):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.post("/experimental/ocr")
+async def experimental_ocr(request: Request):
+    if request.headers.get('content-type', '').split(';', 1)[0].strip().lower() != 'application/json':
+        raise HTTPException(status_code=415, detail="JSON content type required")
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > 4 * ((MAX_IMAGE_BYTES + 2) // 3) + 1024:
+            raise HTTPException(status_code=413, detail="Image request too large")
+    try:
+        payload = OCRInput.model_validate(json.loads(body))
+        image = base64.b64decode(payload.image_base64, validate=True)
+        result = await ocr_image(image, payload.content_type)
+    except (ValueError, UnicodeDecodeError, ValidationError, binascii.Error, OCRServiceError) as exc:
+        raise HTTPException(status_code=422, detail="Image or local OCR request could not be processed") from exc
+    return {"text": result.text, "requires_human_review": True, "clinical_use": False}
 
 
 @app.post("/experimental/recipes/calculate")
