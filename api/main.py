@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 import os
 import sqlite3
@@ -166,6 +167,21 @@ class ManualIngredientInput(BaseModel):
     basis_unit: Literal['g', 'ml']
     food_state: Literal['raw', 'cooked', 'as_sold']
     nutrients: SeasoningNutrients = Field(default_factory=SeasoningNutrients)
+
+
+class USDAIngredientPreviewInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    synthetic_only: Literal[True]
+    fdc_id: Annotated[StrictInt, Field(gt=0)]
+
+
+class USDAIngredientSnapshotInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    synthetic_only: Literal[True]
+    reviewed: Literal[True]
+    fdc_id: Annotated[StrictInt, Field(gt=0)]
+    food_state: Literal["raw", "cooked"]
+    snapshot_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class SyntheticProfileInput(BaseModel):
@@ -480,6 +496,104 @@ async def save_manual_ingredient(request: Request):
         raise HTTPException(status_code=422, detail='Invalid manual ingredient data') from exc
     except sqlite3.Error as exc:
         raise HTTPException(status_code=503, detail='Ingredient storage is unavailable') from exc
+
+
+def _usda_review_snapshot(fdc_id: int) -> dict:
+    """Resolve canonical, reviewable detail. Never accept nutrient fields from a caller."""
+    try:
+        food = USDAFDCClient().get_food(fdc_id)
+    except USDAFDCError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+    if not isinstance(food, dict):
+        raise HTTPException(status_code=503, detail='USDA returned an invalid food record')
+    if food.get('fdc_id') != fdc_id:
+        raise HTTPException(status_code=422, detail='USDA food ID did not match the selected record')
+    if food.get('source_type') not in ('Foundation', 'SR Legacy'):
+        raise HTTPException(status_code=422, detail='Only USDA Foundation and SR Legacy records are supported')
+    if food.get('food_state') not in ('raw', 'cooked'):
+        raise HTTPException(status_code=422, detail='USDA record does not identify raw or cooked state')
+    nutrients = food.get('nutrients')
+    if not isinstance(nutrients, dict) or any(
+            key not in NUTRIENTS or (value is not None and not isinstance(value, Decimal))
+            for key, value in nutrients.items()):
+        raise HTTPException(status_code=503, detail='USDA returned invalid nutrient data')
+    source_version = food.get('source_version')
+    if not isinstance(source_version, str) or not source_version.strip():
+        source_version = f"FoodData Central record {fdc_id}"
+    source_version = source_version.strip()
+    if len(source_version) > 200:
+        raise HTTPException(status_code=503, detail='USDA returned invalid source version data')
+    try:
+        source_date = date.fromisoformat(source_version).isoformat()
+    except ValueError:
+        source_date = None
+    retrieved_on = datetime.now(ZoneInfo('Asia/Bangkok')).date().isoformat()
+    name = food.get('description')
+    if not isinstance(name, str) or not name.strip() or len(name) > 150:
+        raise HTTPException(status_code=503, detail='USDA returned an invalid food description')
+    canonical = {
+        'fdc_id': fdc_id, 'source_type': food['source_type'],
+        'source_version': source_version, 'source_date': source_date,
+        'name': name.strip(), 'food_state': food['food_state'],
+        'basis_quantity': '100', 'basis_unit': 'g',
+        'nutrients': {key: str(nutrients.get(key)) if nutrients.get(key) is not None else None
+                      for key in NUTRIENTS},
+    }
+    digest_material = json.dumps(canonical, sort_keys=True, separators=(',', ':'))
+    canonical['snapshot_digest'] = hashlib.sha256(digest_material.encode()).hexdigest()
+    return canonical
+
+
+@app.post('/experimental/ingredients/usda/preview')
+def preview_usda_ingredient_snapshot(payload: USDAIngredientPreviewInput):
+    """Return exact data user must review before saving a USDA source snapshot."""
+    try:
+        _demo_store()  # Validate the synthetic-only storage marker before external access.
+    except sqlite3.Error:
+        raise HTTPException(status_code=503, detail='Experimental storage is unavailable') from None
+    return _usda_review_snapshot(payload.fdc_id)
+
+
+@app.post('/experimental/ingredients/usda')
+def save_usda_ingredient_snapshot(payload: USDAIngredientSnapshotInput):
+    """Refetch and save only the exact USDA snapshot the user confirmed."""
+    try:
+        store = _demo_store()  # Gate storage before external access or any write attempt.
+    except sqlite3.Error:
+        raise HTTPException(status_code=503, detail='Experimental storage is unavailable') from None
+    canonical = _usda_review_snapshot(payload.fdc_id)
+    if canonical['snapshot_digest'] != payload.snapshot_digest:
+        raise HTTPException(status_code=409, detail='USDA record changed; preview and review it again')
+    if canonical['food_state'] != payload.food_state:
+        raise HTTPException(status_code=409, detail='USDA food state changed; preview and review it again')
+    nutrients = {key: Decimal(value) if value is not None else None
+                 for key, value in canonical['nutrients'].items()}
+    source_reference = f"https://fdc.nal.usda.gov/food-details/{payload.fdc_id}/nutrients"
+    snapshot_version = (f"fdc-{payload.fdc_id}-{canonical['food_state']}-"
+                        f"{canonical['snapshot_digest'][:20]}")
+    retrieved_on = datetime.now(ZoneInfo('Asia/Bangkok')).date().isoformat()
+    provenance = ('USDA FoodData Central; source record fetched by server and reviewed confirmation '
+                  f"provided for preview digest {canonical['snapshot_digest']}; source values preserved as returned.")
+    try:
+        saved = store.ingredients.create_reviewed(
+            name=canonical['name'], provider='USDA FoodData Central', version=snapshot_version,
+            source_version=canonical['source_version'], source_date=canonical['source_date'], retrieved_on=retrieved_on,
+            source_reference=source_reference, provenance=provenance,
+            basis_quantity=Decimal('100'), basis_unit='g', food_state=canonical['food_state'],
+            reviewed=True, nutrients={key: nutrients.get(key) for key in NUTRIENTS},
+            idempotency_key=source_reference,
+        )
+    except sqlite3.Error:
+        raise HTTPException(status_code=503, detail='Ingredient storage is unavailable') from None
+    except ValueError:
+        raise HTTPException(status_code=503, detail='USDA ingredient snapshot could not be saved') from None
+    return {
+        **canonical, **saved, 'version': snapshot_version,
+        'provider': 'USDA FoodData Central', 'source_version': canonical['source_version'],
+        'retrieved_on': saved['retrieved_on'],
+        'source_reference': source_reference, 'provenance': provenance,
+        'reviewed': True, 'synthetic_only': True,
+    }
 
 
 @app.post('/experimental/seasonings')

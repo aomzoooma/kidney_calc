@@ -14,6 +14,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 from api.main import app, _demo_store
+from nutrition.usda_fdc import USDAFDCError
 
 
 class HealthTest(unittest.TestCase):
@@ -279,6 +280,113 @@ class LocalThaiIngredientSearchTest(unittest.TestCase):
         body['ingredients'][0]['ingredient_version_id'] = self.reviewed_version
         body['ingredients'][0]['source_type'] = 'manual'
         self.assertEqual(self.client.post('/experimental/recipes/calculate', json=body).status_code, 422)
+
+    def test_usda_snapshot_is_server_resolved_reviewed_and_idempotent(self):
+        food = {
+            'fdc_id': 77, 'source_type': 'Foundation', 'source_version': '2026-01-01',
+            'description': 'Rice, brown, cooked', 'food_state': 'cooked',
+            'nutrients': {'energy_kcal': Decimal('111'), 'protein_g': Decimal('2.6'),
+                          'sodium_mg': None, 'potassium_mg': None, 'phosphorus_mg': None},
+        }
+        preview_request = {'synthetic_only': True, 'fdc_id': 77}
+        with patch('api.main.USDAFDCClient') as client:
+            client.return_value.get_food.return_value = food
+            preview = self.client.post('/experimental/ingredients/usda/preview', json=preview_request)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            self.assertEqual(preview.json()['name'], food['description'])
+            self.assertEqual(preview.json()['source_type'], 'Foundation')
+            self.assertEqual(preview.json()['food_state'], 'cooked')
+            request = {'synthetic_only': True, 'reviewed': True, 'fdc_id': 77,
+                       'food_state': 'cooked', 'snapshot_digest': preview.json()['snapshot_digest']}
+            first = self.client.post('/experimental/ingredients/usda', json=request)
+            second = self.client.post('/experimental/ingredients/usda', json=request)
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(first.json()['version_id'], second.json()['version_id'])
+        self.assertTrue(first.json()['reviewed'])
+        self.assertEqual(first.json()['source_version'], '2026-01-01')
+        self.assertEqual(first.json()['source_date'], '2026-01-01')
+        self.assertEqual(first.json()['basis_quantity'], '100')
+        self.assertEqual(first.json()['nutrients']['energy_kcal'], '111')
+        self.assertIsNone(first.json()['nutrients']['sodium_mg'])
+        saved = self.store.get_reviewed_version(first.json()['version_id'])
+        self.assertEqual(saved['provider'], 'USDA FoodData Central')
+        self.assertEqual(saved['food_state'], 'cooked')
+        self.assertEqual(saved['nutrients']['protein_g'], Decimal('2.6'))
+        with sqlite3.connect(self.db_path) as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM ingredient_versions WHERE provider = ?',
+                                        ('USDA FoodData Central',)).fetchone()[0], 1)
+        client.return_value.get_food.assert_called()
+        client.return_value.get_food.assert_called_with(77)
+
+    def test_usda_snapshot_rejects_unconfirmed_or_client_supplied_values(self):
+        request = {'synthetic_only': True, 'reviewed': True, 'fdc_id': 77,
+                   'food_state': 'cooked', 'snapshot_digest': '0' * 64}
+        for mutation in (
+            lambda body: body.update(synthetic_only=False),
+            lambda body: body.update(reviewed=False),
+            lambda body: body.update(protein_g='999'),
+            lambda body: body.update(source_type='Branded'),
+        ):
+            body = dict(request)
+            mutation(body)
+            self.assertEqual(self.client.post('/experimental/ingredients/usda', json=body).status_code, 422)
+
+        food = {'fdc_id': 77, 'source_type': 'Foundation', 'source_version': '2026-01-01',
+                'description': 'Rice, brown, cooked', 'food_state': 'cooked', 'nutrients': {}}
+        with patch('api.main.USDAFDCClient') as client:
+            client.return_value.get_food.return_value = food
+            body = {**request, 'food_state': 'raw'}
+            response = self.client.post('/experimental/ingredients/usda', json=body)
+        self.assertEqual(response.status_code, 409)
+        self.assertIn('record changed', response.json()['detail'])
+
+    def test_usda_snapshot_rejects_changed_detail_after_preview(self):
+        preview_food = {'fdc_id': 77, 'source_type': 'Foundation', 'source_version': '2026-01-01',
+                        'description': 'Rice, brown, cooked', 'food_state': 'cooked',
+                        'nutrients': {'energy_kcal': Decimal('111')}}
+        changed_food = {**preview_food, 'description': 'Rice, brown, boiled',
+                        'nutrients': {'energy_kcal': Decimal('112')}}
+        with patch('api.main.USDAFDCClient') as client:
+            client.return_value.get_food.side_effect = [preview_food, changed_food]
+            preview = self.client.post('/experimental/ingredients/usda/preview', json={
+                'synthetic_only': True, 'fdc_id': 77,
+            })
+            response = self.client.post('/experimental/ingredients/usda', json={
+                'synthetic_only': True, 'reviewed': True, 'fdc_id': 77,
+                'food_state': 'cooked', 'snapshot_digest': preview.json()['snapshot_digest'],
+            })
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(self.store.search_reviewed('Rice, brown'), [])
+
+    def test_usda_snapshot_rejects_branded_records_and_returns_safe_upstream_errors(self):
+        request = {'synthetic_only': True, 'reviewed': True, 'fdc_id': 77,
+                   'food_state': 'cooked', 'snapshot_digest': '0' * 64}
+        with patch('api.main.USDAFDCClient') as client:
+            client.return_value.get_food.return_value = {
+                'fdc_id': 77, 'source_type': 'Branded', 'description': 'Product',
+                'food_state': 'as_sold', 'nutrients': {},
+            }
+            response = self.client.post('/experimental/ingredients/usda/preview', json={
+                'synthetic_only': True, 'fdc_id': 77,
+            })
+        self.assertEqual(response.status_code, 422)
+
+        with patch('api.main.USDAFDCClient') as client:
+            client.return_value.get_food.side_effect = USDAFDCError('USDA request failed or timed out')
+            response = self.client.post('/experimental/ingredients/usda', json=request)
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn('api_key', response.text)
+
+    def test_usda_preview_requires_experimental_storage_before_network(self):
+        with patch.dict(os.environ, {'KIDNEY_EXPERIMENTAL_DB': ''}), \
+                patch('api.main.USDAFDCClient') as client:
+            response = self.client.post('/experimental/ingredients/usda/preview', json={
+                'synthetic_only': True, 'fdc_id': 77,
+            })
+        self.assertEqual(response.status_code, 503)
+        client.assert_not_called()
 
 
 class ExperimentalProfileApiTest(unittest.TestCase):

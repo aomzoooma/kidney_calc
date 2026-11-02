@@ -164,7 +164,8 @@ class IngredientStore:
                         source_version: str, retrieved_on: str, source_reference: str,
                         provenance: str, basis_quantity: Decimal, basis_unit: str,
                         food_state: str, reviewed: bool, source_date: str | None = None,
-                        nutrients: dict | None = None) -> dict:
+                        nutrients: dict | None = None,
+                        idempotency_key: str | None = None) -> dict:
         """Create one reviewed ingredient and its first immutable source snapshot atomically."""
         if reviewed is not True:
             raise ValueError("User review is required")
@@ -188,6 +189,37 @@ class IngredientStore:
         columns = ", ".join(f'"{key}"' for key in NUTRIENTS)
         placeholders = ", ".join("?" for _ in NUTRIENTS)
         with self._connect() as db:
+            if idempotency_key is not None:
+                idempotency_key = _text(idempotency_key, "idempotency_key")
+                # Serialize lookup+insert so retried or concurrent POSTs cannot
+                # create duplicate immutable snapshots.
+                db.execute("BEGIN IMMEDIATE")
+                existing = db.execute(
+                    """SELECT i.id AS ingredient_id, v.id AS version_id,
+                              i.name, v.provider, v.version, v.source_version,
+                              v.source_date, v.retrieved_on, v.source_reference,
+                              v.provenance, v.basis_quantity, v.basis_unit,
+                              v.food_state, v.reviewed,
+                              """ + ", ".join(f'v."{key}"' for key in NUTRIENTS) +
+                    """ FROM ingredients i JOIN ingredient_versions v ON v.ingredient_id = i.id
+                        WHERE v.source_reference = ? AND v.version = ?""",
+                    (idempotency_key, version),
+                ).fetchone()
+                if existing is not None:
+                    expected = (name, provider, source_version, source_date,
+                                idempotency_key, provenance, str(basis_quantity), basis_unit,
+                                food_state, 1, *nutrient_values)
+                    actual = (existing["name"], existing["provider"], existing["source_version"],
+                              existing["source_date"],
+                              existing["source_reference"], existing["provenance"],
+                              existing["basis_quantity"], existing["basis_unit"],
+                              existing["food_state"], existing["reviewed"],
+                              *(existing[key] for key in NUTRIENTS))
+                    if actual != expected:
+                        raise ValueError("idempotency key conflicts with an existing snapshot")
+                    return {"ingredient_id": existing["ingredient_id"],
+                            "version_id": existing["version_id"],
+                            "retrieved_on": existing["retrieved_on"]}
             ingredient_id = db.execute(
                 "INSERT INTO ingredients(name) VALUES (?)", (name,)
             ).lastrowid
@@ -201,7 +233,8 @@ class IngredientStore:
                  source_reference, provenance, basis_quantity, basis_unit, food_state, 1,
                  *nutrient_values),
             ).lastrowid
-        return {"ingredient_id": ingredient_id, "version_id": version_id}
+        return {"ingredient_id": ingredient_id, "version_id": version_id,
+                "retrieved_on": retrieved_on}
 
     def get_ingredient(self, ingredient_id: int) -> dict | None:
         """Return source snapshots in insertion order; callers must validate units before calculation."""
