@@ -10,13 +10,13 @@ const { buildCalculationPayload, isCurrentRevision } = await import(`data:text/j
 test('payload keeps multiple ingredient measures and sends unknown nutrients as null', () => {
   const values = { energy_kcal: '130', protein_g: '', sodium_mg: '4', potassium_mg: '', phosphorus_mg: '' }
   const ingredients = [
-    { name: 'rice', amount: '150', unit: 'g', state: 'cooked', reference: '100', values },
-    { name: 'soup', amount: '50', unit: 'ml', state: 'as_sold', reference: '100', values: { ...values, protein_g: '2' } },
+    { name: 'rice', amount: '150', unit: 'g', state: 'cooked', reference: '100', source: 'manual', seasoningVersionId: null, fdcId: null, values },
+    { name: 'soup', amount: '50', unit: 'ml', state: 'as_sold', reference: '100', source: 'manual', seasoningVersionId: null, fdcId: null, values: { ...values, protein_g: '2' } },
   ]
   assert.deepEqual(buildCalculationPayload(ingredients, '0.5'), {
     synthetic_only: true, portion: '0.5', ingredients: [
-      { amount: '150', unit: 'g', food_state: 'cooked', reference_quantity: '100', reference_unit: 'g', reference_food_state: 'cooked', energy_kcal: '130', protein_g: null, sodium_mg: '4', potassium_mg: null, phosphorus_mg: null },
-      { amount: '50', unit: 'ml', food_state: 'as_sold', reference_quantity: '100', reference_unit: 'ml', reference_food_state: 'as_sold', energy_kcal: '130', protein_g: '2', sodium_mg: '4', potassium_mg: null, phosphorus_mg: null },
+      { amount: '150', unit: 'g', food_state: 'cooked', reference_quantity: '100', reference_unit: 'g', reference_food_state: 'cooked', source_type: 'manual', energy_kcal: '130', protein_g: null, sodium_mg: '4', potassium_mg: null, phosphorus_mg: null },
+      { amount: '50', unit: 'ml', food_state: 'as_sold', reference_quantity: '100', reference_unit: 'ml', reference_food_state: 'as_sold', source_type: 'manual', energy_kcal: '130', protein_g: '2', sodium_mg: '4', potassium_mg: null, phosphorus_mg: null },
     ],
   })
 })

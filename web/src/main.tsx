@@ -1,16 +1,19 @@
 import { StrictMode, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { buildCalculationPayload, isCurrentRevision, nutrients, type FoodState, type Ingredient, type NutrientKey, type SavedSeasoning } from './request'
+import { buildCalculationPayload, isCurrentRevision, nutrients, type FoodState, type Ingredient, type IngredientSource, type NutrientKey, type SavedSeasoning } from './request'
 import { OcrPreview } from './OcrPreview'
 import './style.css'
 
 type Result = {
   experimental: boolean; clinical_use: boolean; rounding: string; portion: string;
-  totals: Record<NutrientKey, { value: string | null; complete: boolean }>
+  totals: Record<NutrientKey, { value: string | null; complete: boolean }>;
+  sources?: Array<{ source_id: string; description: string; source_type: string; source_version: string | null; food_state: FoodState; energy_ambiguous: boolean }>
 }
+type USDAFood = { fdc_id: number; description: string; source_type: string; source_version: string | null; food_state: FoodState | null }
 const emptyValues = (): Ingredient['values'] => ({ energy_kcal: '', protein_g: '', sodium_mg: '', potassium_mg: '', phosphorus_mg: '' })
-const newIngredient = (): Ingredient => ({ name: '', amount: '', unit: 'g', state: 'raw', reference: '100', values: emptyValues(), seasoningVersionId: null })
+const newIngredient = (): Ingredient => ({ name: '', amount: '', unit: 'g', state: 'raw', reference: '100', values: emptyValues(), source: 'manual', seasoningVersionId: null, fdcId: null, fdcState: null })
 const stateNames: Record<FoodState, string> = { raw: 'ดิบ', cooked: 'สุก', as_sold: 'ตามสภาพที่ซื้อ' }
+const foodStateLabel = (state: FoodState | null) => state ? stateNames[state] : 'ไม่ระบุสภาพ · ยังใช้คำนวณไม่ได้'
 const pages = [
   { id: 'home', label: 'หน้าหลัก', compact: 'หน้าแรก' },
   { id: 'patients', label: 'ผู้ป่วย', compact: 'ผู้ป่วย' },
@@ -32,6 +35,10 @@ export function App() {
   const [openIngredient, setOpenIngredient] = useState(0)
   const [savedSeasonings, setSavedSeasonings] = useState<SavedSeasoning[]>([])
   const [seasoningsError, setSeasoningsError] = useState('')
+  const [usdaQuery, setUsdaQuery] = useState('')
+  const [usdaFoods, setUsdaFoods] = useState<USDAFood[]>([])
+  const [usdaError, setUsdaError] = useState('')
+  const [usdaBusy, setUsdaBusy] = useState(false)
   const [portion, setPortion] = useState('1')
   const [result, setResult] = useState<Result | null>(null)
   const [error, setError] = useState('')
@@ -94,16 +101,51 @@ export function App() {
 
   function selectSeasoning(index: number, versionId: string) {
     if (!versionId) {
-      update(index, { ...newIngredient(), amount: ingredients[index].amount })
+      update(index, { ...newIngredient(), amount: ingredients[index].amount, source: 'manual' })
       return
     }
     const seasoning = savedSeasonings.find(item => item.version_id === Number(versionId))
     if (!seasoning) return
     update(index, {
-      name: seasoning.name, seasoningVersionId: seasoning.version_id, unit: seasoning.basis_unit,
+      name: seasoning.name, source: 'seasoning', seasoningVersionId: seasoning.version_id, unit: seasoning.basis_unit,
+      fdcId: null,
       state: 'as_sold', reference: String(seasoning.basis_quantity),
       values: Object.fromEntries(nutrients.map(([key]) => [key, seasoning.nutrients[key] === null ? '' : String(seasoning.nutrients[key])])) as Ingredient['values'],
     })
+  }
+
+  async function searchUSDA() {
+    setUsdaBusy(true); setUsdaError(''); setUsdaFoods([])
+    try {
+      const response = await fetch(`/experimental/usda/search?q=${encodeURIComponent(usdaQuery.trim())}`)
+      const payload = await response.json()
+      if (!response.ok) throw new Error(typeof payload.detail === 'string' ? payload.detail : 'ค้นหาฐานข้อมูล USDA ไม่สำเร็จ')
+      setUsdaFoods(payload.items as USDAFood[])
+    } catch {
+      setUsdaError('ค้นหา USDA ไม่สำเร็จ ตรวจ API และ USDA_FDC_API_KEY บนเครื่องนี้')
+    } finally { setUsdaBusy(false) }
+  }
+
+  function selectSource(index: number, source: IngredientSource) {
+    const current = ingredients[index]
+    if (source === 'manual' && current.source !== 'seasoning') {
+      update(index, { ...current, source, seasoningVersionId: null, fdcId: null, fdcState: null })
+      return
+    }
+    if (source === 'usda' && current.source === 'manual') {
+      update(index, { ...current, source, unit: 'g', seasoningVersionId: null, fdcId: null, fdcState: null })
+      return
+    }
+    update(index, { ...newIngredient(), amount: current.amount, source })
+  }
+
+  function addUSDAFood(food: USDAFood) {
+    revision.current++
+    const index = ingredients.length
+    setIngredients(current => [...current, { ...newIngredient(), source: 'usda', name: food.description,
+      fdcId: food.fdc_id, fdcState: food.food_state, state: food.food_state ?? 'raw' }])
+    setOpenIngredient(index)
+    setResult(null)
   }
 
   async function calculate(event: React.FormEvent<HTMLFormElement>) {
@@ -150,7 +192,7 @@ export function App() {
       {page === 'patients' && <section className="placeholder-page" aria-labelledby="patients-title"><h1 id="patients-title">ผู้ป่วย</h1><p className="status-line">กำลังพัฒนา</p><p>ส่วนนี้ยังไม่มีระบบสร้างหรือบันทึกโปรไฟล์ผู้ป่วย โปรดอย่ากรอกข้อมูลจริงในต้นแบบนี้</p></section>}
       {ingredientsVisited && <section hidden={page !== 'ingredients'} aria-labelledby="ingredients-title"><div className="page-intro"><h1 id="ingredients-title">วัตถุดิบและเครื่องปรุง</h1><p>การอ่านภาพและบันทึกยังเป็นการทดลอง ใช้ภาพทดสอบเท่านั้น</p></div><OcrPreview /></section>}
       {page === 'recipes' && <section aria-labelledby="recipe-title">
-        <div className="page-intro"><h1 id="recipe-title">สูตรอาหาร</h1><p>เครื่องคำนวณทดลองจากตัวเลขสมมติ ยังไม่มีระบบบันทึกสูตร</p></div>
+        <div className="page-intro"><h1 id="recipe-title">สูตรอาหาร</h1><p>เครื่องคำนวณทดลอง ยังไม่มีระบบบันทึกสูตร · USDA เป็นข้อมูลอาหารจริงสาธารณะ</p></div>
         <aside className="notice" role="note"><span className="notice-mark" aria-hidden="true">!</span><div><h2>ใช้ตัวเลขสมมติเท่านั้น</h2><p>ห้ามใช้ค่าจากฉลากอาหารจริงหรือข้อมูลผู้ป่วย ผลนี้ใช้ตัดสินใจด้านอาหารหรือการรักษาไม่ได้</p></div></aside>
         <form onSubmit={calculate} onInvalidCapture={event => {
           if (invalidHandled.current) return
@@ -167,6 +209,15 @@ export function App() {
             invalidHandled.current = false
           })
         }}>
+          <section className="usda-search" aria-label="ค้นหาอาหาร USDA">
+            <h2>ค้นหาอาหารใน USDA FoodData Central</h2>
+            <p>ค้นหารายการอ้างอิงไม่ใช่สินค้าแบรนด์ (Foundation / SR Legacy) · ส่งเฉพาะชื่ออาหารภาษาอังกฤษไป USDA · ห้ามใส่ชื่อผู้ป่วยหรือข้อมูลส่วนบุคคล · ไม่มีการแปลหรือเทียบชื่ออาหารไทย</p>
+            <label>ชื่ออาหารภาษาอังกฤษ <input value={usdaQuery} onChange={e => setUsdaQuery(e.target.value)} maxLength={200} autoComplete="off" /></label>
+            <button type="button" className="add-button" disabled={usdaBusy || !usdaQuery.trim()} onClick={() => void searchUSDA()}>{usdaBusy ? 'กำลังค้นหา…' : 'ค้นหา USDA'}</button>
+            {usdaError && <p className="error" role="alert">{usdaError}</p>}
+            <ul className="usda-results">{usdaFoods.map(food => <li key={food.fdc_id}><strong>{food.description}</strong><small>USDA FDC · รายการอ้างอิงไม่ใช่สินค้าแบรนด์ · {food.source_type} · {foodStateLabel(food.food_state)} · {food.source_version ?? 'รุ่นข้อมูลไม่ระบุ'} · ID {food.fdc_id}</small>
+              <button type="button" className="add-button" onClick={() => addUSDAFood(food)}>เพิ่มเป็นรายการใหม่</button></li>)}</ul>
+          </section>
           <section className="section-heading"><h2>รายการวัตถุดิบ</h2><button type="button" className="add-button" onClick={addIngredient}>＋ เพิ่มวัตถุดิบ</button></section>
           {ingredients.map((item, index) => <div className="ingredient-card" key={index}>
             <details className="ingredient-details" data-ingredient-index={index} open={openIngredient === index}>
@@ -176,29 +227,33 @@ export function App() {
               }}><span>{item.name.trim() || `วัตถุดิบ ${index + 1}`}</span><span>{item.amount ? `${item.amount} ${item.unit === 'g' ? 'กรัม' : 'มล.'}` : 'ยังไม่ระบุปริมาณ'}</span></summary>
               <fieldset className="ingredient-fields">
             <legend className="visually-hidden">วัตถุดิบ {index + 1}</legend>
-            <label>เลือกเครื่องปรุงที่บันทึกไว้ <select value={item.seasoningVersionId ?? ''} onChange={e => selectSeasoning(index, e.target.value)}><option value="">กรอกวัตถุดิบสมมติเอง</option>{savedSeasonings.map(seasoning => <option key={seasoning.version_id} value={seasoning.version_id}>{seasoning.name}{seasoning.brand ? ` · ${seasoning.brand}` : ''} (รุ่น {seasoning.version_id})</option>)}</select></label>
-            {item.seasoningVersionId === null && <label>ชื่อวัตถุดิบ <input value={item.name} onChange={e => update(index, { name: e.target.value })} placeholder="เช่น ข้าวสวย" autoComplete="off" /></label>}
+            <label>แหล่งข้อมูล <select aria-label={`แหล่งข้อมูลวัตถุดิบ ${index + 1}`} value={item.source} onChange={e => selectSource(index, e.target.value as IngredientSource)}><option value="manual">กรอกข้อมูลเอง</option><option value="usda">USDA รายการอ้างอิงไม่ใช่สินค้าแบรนด์</option><option value="seasoning">เครื่องปรุงที่บันทึกไว้</option></select></label>
+            {item.source === 'seasoning' && <label>เลือกเครื่องปรุงที่บันทึกไว้ <select value={item.seasoningVersionId ?? ''} onChange={e => selectSeasoning(index, e.target.value)}><option value="">เลือกเครื่องปรุง</option>{savedSeasonings.map(seasoning => <option key={seasoning.version_id} value={seasoning.version_id}>{seasoning.name}{seasoning.brand ? ` · ${seasoning.brand}` : ''} (รุ่น {seasoning.version_id})</option>)}</select></label>}
+            {item.source === 'manual' && <label>ชื่อวัตถุดิบ <input value={item.name} onChange={e => update(index, { name: e.target.value })} placeholder="เช่น ข้าวสวย" autoComplete="off" /></label>}
             {item.seasoningVersionId !== null && <p className="footnote">ใช้ข้อมูลที่บันทึกไว้จากรุ่นนี้ ระบบคำนวณจะอ่านค่าจากฐานข้อมูลโดยตรง</p>}
+            {item.fdcId !== null && <p className="footnote">USDA FoodData Central · รายการอ้างอิงไม่ใช่สินค้าแบรนด์ · ID {item.fdcId} · สภาพ: {foodStateLabel(item.fdcState)} · ค่ารายละเอียดจะดึงจาก USDA ฝั่งเซิร์ฟเวอร์เมื่อคำนวณ</p>}
+            {item.source === 'usda' && item.fdcId === null && <p className="footnote">ค้นหาอาหารด้านบน แล้วกด “เพิ่มเป็นรายการใหม่” เพื่อเพิ่มรายการ USDA แยกต่างหาก</p>}
             <div className="field-grid">
-              <label>ปริมาณที่ใช้ <span className="input-unit"><input required inputMode="decimal" type="number" min="0.00000001" step="any" value={item.amount} onChange={e => update(index, { amount: e.target.value })} placeholder="เช่น 150" /><select aria-label="หน่วยปริมาณ" value={item.unit} disabled={item.seasoningVersionId !== null} onChange={e => update(index, { unit: e.target.value as Ingredient['unit'] })}><option value="g">กรัม</option><option value="ml">มล.</option></select></span></label>
-              <label>สภาพอาหาร <select value={item.state} disabled={item.seasoningVersionId !== null} onChange={e => update(index, { state: e.target.value as FoodState })}>{Object.entries(stateNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+              <label>ปริมาณที่ใช้ <span className="input-unit"><input required inputMode="decimal" type="number" min="0.00000001" step="any" value={item.amount} onChange={e => update(index, { amount: e.target.value })} placeholder="เช่น 150" /><select aria-label="หน่วยปริมาณ" value={item.unit} disabled={item.source !== 'manual'} onChange={e => update(index, { unit: e.target.value as Ingredient['unit'] })}><option value="g">กรัม</option><option value="ml">มล.</option></select></span></label>
+              <label>สภาพอาหาร {item.fdcId !== null ? <span>{foodStateLabel(item.fdcState)}</span> : <select value={item.state} disabled={item.seasoningVersionId !== null} onChange={e => update(index, { state: e.target.value as FoodState })}>{Object.entries(stateNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>}</label>
             </div>
-            <label>ข้อมูลสารอาหารต่อ <span className="inline-input"><input required inputMode="decimal" type="number" min="0.00000001" step="any" value={item.reference} readOnly={item.seasoningVersionId !== null} onChange={e => update(index, { reference: e.target.value })} /><span>{item.unit === 'g' ? 'กรัม' : 'มล.'} (หน่วยเดียวกับปริมาณที่ใช้)</span></span></label>
-            <div className="nutrient-grid"><p className="subheading">สารอาหารในปริมาณอ้างอิง <span>เว้นว่างได้เมื่อไม่ทราบ</span></p>
+            {item.source !== 'usda' && <label>ข้อมูลสารอาหารต่อ <span className="inline-input"><input required inputMode="decimal" type="number" min="0.00000001" step="any" value={item.reference} readOnly={item.source === 'seasoning'} onChange={e => update(index, { reference: e.target.value })} /><span>{item.unit === 'g' ? 'กรัม' : 'มล.'} (หน่วยเดียวกับปริมาณที่ใช้)</span></span></label>}
+            {item.source === 'manual' && <div className="nutrient-grid"><p className="subheading">สารอาหารในปริมาณอ้างอิง <span>เว้นว่างได้เมื่อไม่ทราบ</span></p>
               {nutrients.map(([key, label, unit]) => <label key={key}>{label} <span className="nutrient-unit"><input inputMode="decimal" type="number" min="0" step="any" value={item.values[key]} readOnly={item.seasoningVersionId !== null} onChange={e => update(index, { values: { ...item.values, [key]: e.target.value } })} placeholder="ไม่ทราบ" /><span>{unit}</span></span></label>)}
-            </div>
+            </div>}
               </fieldset>
             </details>
             {ingredients.length > 1 && <button type="button" className="remove-button" aria-label={`ลบวัตถุดิบ ${index + 1}`} onClick={() => removeIngredient(index)}>ลบ</button>}
           </div>)}
           <section className="portion-card"><label htmlFor="portion">สัดส่วนที่เสิร์ฟ</label><div><input id="portion" required inputMode="decimal" type="number" min="0.00000001" max="1" step="any" value={portion} onChange={e => { revision.current++; setPortion(e.target.value); setResult(null) }} /><span>ส่วนของสูตรทั้งหมด (0–1)</span></div></section>
-          <label className="attestation"><input type="checkbox" required /> ยืนยันว่าข้อมูลทั้งหมดเป็นตัวเลขสมมติ ไม่ได้ใช้ค่าจากฉลากอาหารจริงหรือข้อมูลผู้ป่วย</label>
+          <label className="attestation"><input type="checkbox" required /> ยืนยันว่ากำลังทดสอบด้วยสูตรสมมติ ไม่ใช่อาหารหรือข้อมูลผู้ป่วยจริง</label>
           <button className="submit-button" type="submit" disabled={busy}>{busy ? 'กำลังคำนวณ…' : 'คำนวณสารอาหาร'}</button>
         </form>
         {seasoningsError && <p className="error" role="status">{seasoningsError}</p>}
         {error && <p className="error" role="alert">{error}</p>}
         {result && <section className="results" aria-live="polite" aria-labelledby="results-title"><div className="result-title"><h2 id="results-title">สารอาหารโดยประมาณ · {result.portion} ส่วน</h2><span className="status-pill">ไม่ใช่คำแนะนำทางการแพทย์</span></div>
           <ul>{nutrients.map(([key, label, unit]) => { const total = result.totals[key]; return <li key={key}><span>{label}</span><strong>{total.value === null ? 'ไม่ทราบ' : `${total.value} ${unit}`}</strong><small>{total.complete ? 'ข้อมูลครบตามที่กรอก' : 'ข้อมูลไม่ครบ · มีรายการที่ไม่ทราบ'}</small></li> })}</ul>
+          {result.sources?.map(source => <p className="footnote" key={source.source_id}>แหล่งข้อมูล USDA อ้างอิงไม่ใช่สินค้าแบรนด์: {source.source_id} · {source.description} · {source.source_type} · สภาพ {stateNames[source.food_state]} · รุ่น {source.source_version ?? 'ไม่ระบุ'}{source.energy_ambiguous ? ' · พลังงานมีหลายค่าขัดแย้ง จึงแสดงเป็นไม่ทราบ' : ''}</p>)}
           <p className="footnote">ค่าที่ทราบรวมตามสูตรและสัดส่วนเสิร์ฟ ค่าที่เว้นว่างยังคงเป็น “ไม่ทราบ” ไม่ได้ถือเป็นศูนย์</p>
         </section>}
       </section>}

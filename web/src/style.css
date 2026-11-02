@@ -39,6 +39,11 @@ p { margin: .4rem 0; }
 .section-heading, .result-title { display: flex; justify-content: space-between; align-items: center; gap: .7rem; margin: 1.3rem 0 .65rem; }
 .add-button, .remove-button { border: 1px solid #b9d0c2; color: var(--green); background: #fff; border-radius: .7rem; padding: .45rem .75rem; font-weight: 700; }
 .ingredient-card, .portion-card, .results { position: relative; min-width: 0; margin: .75rem 0; padding: 1rem; border: 1px solid var(--line); border-radius: 1rem; background: #fff; box-shadow: 0 3px 12px #173d2b0a; }
+.usda-search { margin: 1rem 0; padding: 1rem; border: 1px solid var(--line); border-radius: 1rem; background: #fff; }
+.usda-search > p { color: var(--muted); font-size: .85rem; }
+.usda-results { list-style: none; padding: 0; margin: .5rem 0 0; }
+.usda-results li { display: grid; gap: .25rem; padding: .7rem 0; border-top: 1px solid var(--line); }
+.usda-results small { color: var(--muted); }
 .ingredient-card { padding: 0; }
 .ingredient-summary { display: flex; flex-wrap: wrap; align-items: center; gap: .2rem .75rem; min-height: 3.25rem; padding: .75rem 6rem .75rem 1rem; color: var(--green); font-weight: 750; cursor: pointer; }
 .ingredient-summary:focus-visible { outline: 3px solid #66a989; outline-offset: 2px; }

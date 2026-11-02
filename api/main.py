@@ -8,6 +8,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import threading
 from datetime import datetime
 from decimal import Decimal, DecimalException, InvalidOperation
 from pathlib import Path
@@ -15,7 +16,7 @@ from typing import Annotated, Literal, Optional
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictInt, ValidationError
 
@@ -23,6 +24,7 @@ from nutrition.calculator import NUTRIENTS, Measure, NutrientSource, calculate
 from nutrition.label_parser import parse_nutrition_label
 from nutrition.seasonings import SeasoningStore
 from api.ocr import MAX_IMAGE_BYTES, OCRServiceError, ocr_image
+from nutrition.usda_fdc import USDAFDCClient, USDAFDCError
 
 
 def _json_decimal(value):
@@ -54,7 +56,9 @@ class IngredientInput(BaseModel):
     reference_quantity: Positive
     reference_unit: Literal["g", "ml"]
     reference_food_state: Literal["raw", "cooked", "as_sold"]
+    source_type: Optional[Literal["manual", "usda", "seasoning"]] = None
     seasoning_version_id: Optional[Annotated[StrictInt, Field(gt=0)]] = None
+    fdc_id: Optional[Annotated[StrictInt, Field(gt=0)]] = None
     energy_kcal: Optional[Number] = None
     protein_g: Optional[Number] = None
     sodium_mg: Optional[Number] = None
@@ -103,29 +107,39 @@ def _demo_store():
     if not path:
         raise HTTPException(status_code=503, detail='Experimental storage is not configured')
     target = Path(path)
-    if target.is_symlink():
-        raise HTTPException(status_code=503, detail='Experimental storage is invalid')
-    try:
-        if not target.exists():
-            descriptor, temporary = tempfile.mkstemp(prefix='.kidney-demo-', dir=str(target.parent))
-            os.close(descriptor)
-            try:
-                with sqlite3.connect(temporary) as db:
-                    db.execute('CREATE TABLE experimental_demo_marker (marker TEXT NOT NULL)')
-                    db.execute("INSERT INTO experimental_demo_marker VALUES ('synthetic-only-v1')")
+    with _demo_store_lock:
+        if target.is_symlink():
+            raise HTTPException(status_code=503, detail='Experimental storage is invalid')
+        try:
+            if not target.exists():
+                descriptor, temporary = tempfile.mkstemp(prefix='.kidney-demo-', dir=str(target.parent))
+                os.close(descriptor)
                 try:
-                    os.link(temporary, str(target))
-                except FileExistsError:
-                    pass
-            finally:
-                os.unlink(temporary)
-        with sqlite3.connect(f'{target.resolve().as_uri()}?mode=ro', uri=True) as db:
-            marker = db.execute('SELECT marker FROM experimental_demo_marker').fetchall()
-        if marker != [('synthetic-only-v1',)]:
-            raise ValueError('not an experimental database')
-        return SeasoningStore(target)
-    except (OSError, sqlite3.Error, ValueError) as exc:
-        raise HTTPException(status_code=503, detail='Experimental storage is invalid or unavailable') from exc
+                    with sqlite3.connect(temporary) as db:
+                        db.execute('CREATE TABLE experimental_demo_marker (marker TEXT NOT NULL)')
+                        db.execute("INSERT INTO experimental_demo_marker VALUES ('synthetic-only-v1')")
+                    try:
+                        os.link(temporary, str(target))
+                    except FileExistsError:
+                        pass
+                finally:
+                    os.unlink(temporary)
+            with sqlite3.connect(f'{target.resolve().as_uri()}?mode=ro', uri=True) as db:
+                marker = db.execute('SELECT marker FROM experimental_demo_marker').fetchall()
+            if marker != [('synthetic-only-v1',)]:
+                raise ValueError('not an experimental database')
+            resolved = target.resolve()
+            stat = resolved.stat()
+            identity = (stat.st_dev, stat.st_ino)
+            cached = _demo_stores.get(resolved)
+            if cached is None or cached[0] != identity:
+                store = SeasoningStore(target)
+                stat = resolved.stat()
+                identity = (stat.st_dev, stat.st_ino)
+                _demo_stores[resolved] = (identity, store)
+            return _demo_stores[resolved][1]
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            raise HTTPException(status_code=503, detail='Experimental storage is invalid or unavailable') from exc
 
 
 def _suggestions(text):
@@ -147,6 +161,24 @@ def _suggestions(text):
 
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+_demo_store_lock = threading.Lock()
+# Experimental single-process cache: inode identity catches atomic replacements,
+# but not in-place resets; separate worker processes do not share this lock/cache.
+_demo_stores: dict[Path, tuple[tuple[int, int], SeasoningStore]] = {}
+
+
+@app.get("/experimental/usda/search")
+def search_usda_foods(q: str = Query(min_length=1, max_length=200), page: int = Query(default=1, ge=1)):
+    if not q.strip():
+        raise HTTPException(status_code=422, detail="Food search text is required")
+    try:
+        result = USDAFDCClient().search(q, page_number=page, page_size=10,
+                                        data_types=("Foundation", "SR Legacy"))
+        return {"items": result.foods, "page": result.page_number,
+                "total_pages": result.total_pages, "total_hits": result.total_hits,
+                "experimental": True}
+    except USDAFDCError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
 
 
 @app.middleware("http")
@@ -236,7 +268,46 @@ async def save_seasoning(request: Request):
 @app.post("/experimental/recipes/calculate")
 def calculate_recipe(payload: RecipeInput):
     ingredients = []
+    source_details = []
     for index, item in enumerate(payload.ingredients, 1):
+        if item.source_type == "usda" and (item.fdc_id is None or item.seasoning_version_id is not None
+                or any(getattr(item, name) is not None for name in NUTRIENTS)):
+            raise HTTPException(status_code=422, detail="Select a USDA record; its nutrients are resolved by the server")
+        if item.source_type == "seasoning" and (item.seasoning_version_id is None or item.fdc_id is not None):
+            raise HTTPException(status_code=422, detail="Select a saved seasoning version")
+        if item.source_type == "manual" and (item.fdc_id is not None or item.seasoning_version_id is not None):
+            raise HTTPException(status_code=422, detail="Manual source cannot include a saved source ID")
+        if item.fdc_id is not None:
+            if item.seasoning_version_id is not None or any(
+                    getattr(item, name) is not None for name in NUTRIENTS):
+                raise HTTPException(status_code=422, detail="USDA food values are resolved by the server")
+            try:
+                food = USDAFDCClient().get_food(item.fdc_id)
+            except USDAFDCError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from None
+            if food["fdc_id"] != item.fdc_id:
+                raise HTTPException(status_code=422, detail="USDA food ID did not match the selected record")
+            if food["source_type"] not in ("Foundation", "SR Legacy"):
+                raise HTTPException(status_code=422, detail="Only unbranded USDA Foundation and SR Legacy records are supported")
+            if food["food_state"] is None:
+                raise HTTPException(status_code=422, detail="USDA record does not identify raw or cooked state")
+            if item.unit != "g":
+                raise HTTPException(status_code=422, detail="USDA values use grams; volume conversion is unavailable")
+            source_details.append({
+                "source_id": food["source_id"], "description": food["description"],
+                "source_type": food["source_type"], "source_version": food["source_version"],
+                "food_state": food["food_state"], "energy_ambiguous": food["energy_ambiguous"],
+                "energy_candidates": [
+                    {**candidate, "value": str(candidate["value"]) if candidate["value"] is not None else None,
+                     "source_value": str(candidate["source_value"]) if candidate["source_value"] is not None else None}
+                    for candidate in food["energy_candidates"]
+                ],
+            })
+            amount = Measure(item.amount, "g", food["food_state"])
+            reference = Measure(Decimal("100"), "g", food["food_state"])
+            source = NutrientSource(reference, food["nutrients"], food["source_id"], reviewed=False)
+            ingredients.append((amount, source))
+            continue
         amount = Measure(item.amount, item.unit, item.food_state)
         if item.seasoning_version_id is not None:
             seasoning = _demo_store().get_reviewed_version(item.seasoning_version_id)
@@ -263,6 +334,7 @@ def calculate_recipe(payload: RecipeInput):
         "clinical_use": False,
         "rounding": "Decimal context precision is 28 significant digits; no display rounding is applied.",
         "portion": str(payload.portion),
+        "sources": source_details,
         "totals": {
             name: {"value": str(value) if value is not None else None, "complete": complete}
             for name, (value, complete) in totals.items()

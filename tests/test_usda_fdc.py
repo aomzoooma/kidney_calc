@@ -30,6 +30,8 @@ class USDAFDCTest(unittest.TestCase):
                 "totalPages": 3, "totalHits": 51,
                 "foods": [{"fdcId": 987, "dataType": "Foundation",
                            "publishedDate": "2026-05-01",
+                           "description": "Rice, brown, long-grain, cooked"},
+                          {"fdcId": 988, "dataType": "Branded",
                            "description": "Rice, brown, long-grain, cooked"}],
             })
 
@@ -48,6 +50,7 @@ class USDAFDCTest(unittest.TestCase):
         self.assertEqual(page.foods[0]["source_type"], "Foundation")
         self.assertEqual(page.foods[0]["source_version"], "2026-05-01")
         self.assertEqual(page.foods[0]["food_state"], "cooked")
+        self.assertEqual(len(page.foods), 1)
         self.assertTrue(page.foods[0]["requires_human_review"])
         self.assertFalse(page.foods[0]["imported"])
 

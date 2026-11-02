@@ -1,6 +1,11 @@
 """HTTP integration tests for the development-only application foundation."""
 
 import unittest
+import os
+import json
+from unittest.mock import patch
+
+import httpx
 
 from fastapi.testclient import TestClient
 
@@ -116,6 +121,99 @@ class ExperimentalRecipeApiTest(unittest.TestCase):
                 "/experimental/recipes/calculate", json=self.payload, headers=headers
             )
             self.assertEqual(response.status_code, 403)
+
+    def test_usda_search_uses_backend_key_and_returns_source_state(self):
+        seen = {}
+
+        def handle(request):
+            seen['key'] = request.url.params.get('api_key')
+            seen['body'] = request.read()
+            return httpx.Response(200, json={'totalPages': 1, 'totalHits': 1, 'foods': [{
+                'fdcId': 77, 'dataType': 'Foundation', 'publishedDate': '2026-01-01',
+                'description': 'Rice, brown, cooked',
+            }]})
+
+        transport = httpx.Client(transport=httpx.MockTransport(handle))
+        with patch.dict(os.environ, {'USDA_FDC_API_KEY': 'server-secret'}), \
+                patch('nutrition.usda_fdc.httpx.Client', return_value=transport):
+            response = self.client.get('/experimental/usda/search', params={'q': 'brown rice'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(seen['key'], 'server-secret')
+        self.assertNotIn('server-secret', response.text)
+        self.assertEqual(json.loads(seen['body'])['dataType'], ['Foundation', 'SR Legacy'])
+        self.assertEqual(response.json()['items'][0]['food_state'], 'cooked')
+        self.assertEqual(response.json()['items'][0]['source_id'], 'USDA-FDC:77')
+        self.assertNotIn('api_key', str(seen['body']))
+        transport.close()
+
+    def test_usda_calculation_resolves_nutrients_on_server_and_ignores_client_state(self):
+        def handle(request):
+            return httpx.Response(200, json={
+                'fdcId': 77, 'dataType': 'Foundation', 'description': 'Rice, brown, cooked',
+                'foodNutrients': [
+                    {'nutrient': {'id': 1008, 'unitName': 'kcal'}, 'amount': 111},
+                    {'nutrient': {'id': 1003, 'unitName': 'g'}, 'amount': 2.6},
+                ],
+            })
+
+        transport = httpx.Client(transport=httpx.MockTransport(handle))
+        body = {'synthetic_only': True, 'portion': '1', 'ingredients': [{
+            'amount': '100', 'unit': 'g', 'food_state': 'raw', 'reference_quantity': '100',
+            'reference_unit': 'g', 'reference_food_state': 'raw', 'source_type': 'usda', 'fdc_id': 77,
+            'energy_kcal': None, 'protein_g': None, 'sodium_mg': None,
+            'potassium_mg': None, 'phosphorus_mg': None,
+        }]}
+        with patch.dict(os.environ, {'USDA_FDC_API_KEY': 'server-secret'}), \
+                patch('nutrition.usda_fdc.httpx.Client', return_value=transport):
+            response = self.client.post('/experimental/recipes/calculate', json=body)
+        self.assertEqual(response.status_code, 200, response.text)
+        totals = response.json()['totals']
+        self.assertEqual(totals['energy_kcal']['value'], '111')
+        self.assertEqual(totals['protein_g']['value'], '2.6')
+        self.assertFalse(totals['sodium_mg']['complete'])
+        transport.close()
+
+    def test_unknown_usda_preparation_blocks_calculation_and_client_nutrients_are_rejected(self):
+        body = {'synthetic_only': True, 'portion': '1', 'ingredients': [{
+            'amount': '100', 'unit': 'g', 'food_state': 'raw', 'reference_quantity': '100',
+            'reference_unit': 'g', 'reference_food_state': 'raw', 'source_type': 'usda', 'fdc_id': 77,
+        }]}
+        transport = httpx.Client(transport=httpx.MockTransport(lambda _req: httpx.Response(200, json={
+            'fdcId': 77, 'dataType': 'Foundation', 'description': 'Rice', 'foodNutrients': [],
+        })))
+        with patch.dict(os.environ, {'USDA_FDC_API_KEY': 'server-secret'}), \
+                patch('nutrition.usda_fdc.httpx.Client', return_value=transport):
+            response = self.client.post('/experimental/recipes/calculate', json=body)
+        self.assertEqual(response.status_code, 422)
+        body['ingredients'][0]['energy_kcal'] = '99'
+        self.assertEqual(self.client.post('/experimental/recipes/calculate', json=body).status_code, 422)
+        transport.close()
+
+    def test_usda_source_requires_selected_id_and_forbids_client_values(self):
+        ingredient = {
+            'amount': '100', 'unit': 'g', 'food_state': 'raw', 'reference_quantity': '100',
+            'reference_unit': 'g', 'reference_food_state': 'raw', 'source_type': 'usda',
+        }
+        body = {'synthetic_only': True, 'portion': '1', 'ingredients': [ingredient]}
+        self.assertEqual(self.client.post('/experimental/recipes/calculate', json=body).status_code, 422)
+        ingredient['fdc_id'] = 77
+        ingredient['protein_g'] = '3'
+        self.assertEqual(self.client.post('/experimental/recipes/calculate', json=body).status_code, 422)
+
+    def test_server_rejects_branded_fdc_id_even_when_submitted_directly(self):
+        transport = httpx.Client(transport=httpx.MockTransport(lambda _req: httpx.Response(200, json={
+            'fdcId': 77, 'dataType': 'Branded', 'description': 'Rice, Product X', 'foodNutrients': [],
+        })))
+        body = {'synthetic_only': True, 'portion': '1', 'ingredients': [{
+            'amount': '100', 'unit': 'g', 'food_state': 'as_sold', 'reference_quantity': '100',
+            'reference_unit': 'g', 'reference_food_state': 'as_sold', 'source_type': 'usda', 'fdc_id': 77,
+        }]}
+        with patch.dict(os.environ, {'USDA_FDC_API_KEY': 'server-secret'}), \
+                patch('nutrition.usda_fdc.httpx.Client', return_value=transport):
+            response = self.client.post('/experimental/recipes/calculate', json=body)
+        self.assertEqual(response.status_code, 422)
+        self.assertIn('unbranded USDA', response.json()['detail'])
+        transport.close()
 
 
 if __name__ == '__main__':
