@@ -1,6 +1,7 @@
 import { StrictMode, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { buildCalculationPayload, isCurrentRevision, nutrients, type FoodState, type Ingredient, type IngredientSource, type NutrientKey, type SavedIngredient, type SavedSeasoning } from './request'
+import { ManualIngredientForm } from './ManualIngredientForm'
 import { OcrPreview } from './OcrPreview'
 import './style.css'
 
@@ -250,7 +251,7 @@ export function App() {
         <p>ข้อมูลผู้ป่วยและบันทึกอาหารยังไม่มีระบบบันทึก</p>
       </section>}
       {page === 'patients' && <section className="placeholder-page" aria-labelledby="patients-title"><h1 id="patients-title">ผู้ป่วย</h1><p className="status-line">กำลังพัฒนา</p><p>ส่วนนี้ยังไม่มีระบบสร้างหรือบันทึกโปรไฟล์ผู้ป่วย โปรดอย่ากรอกข้อมูลจริงในต้นแบบนี้</p></section>}
-      {ingredientsVisited && <section hidden={page !== 'ingredients'} aria-labelledby="ingredients-title"><div className="page-intro"><h1 id="ingredients-title">วัตถุดิบและเครื่องปรุง</h1><p>การอ่านภาพและบันทึกยังเป็นการทดลอง ใช้ภาพทดสอบเท่านั้น</p></div><OcrPreview /></section>}
+      {ingredientsVisited && <section hidden={page !== 'ingredients'} aria-labelledby="ingredients-title"><div className="page-intro"><h1 id="ingredients-title">วัตถุดิบและเครื่องปรุง</h1><p>การอ่านภาพและบันทึกยังเป็นการทดลอง ใช้ภาพทดสอบเท่านั้น</p></div><OcrPreview /><ManualIngredientForm /></section>}
       {page === 'recipes' && <section aria-labelledby="recipe-title">
         <div className="page-intro"><h1 id="recipe-title">สูตรอาหาร</h1><p>เครื่องคำนวณทดลอง ยังไม่มีระบบบันทึกสูตร · USDA เป็นข้อมูลอาหารจริงสาธารณะ</p></div>
         <aside className="notice" role="note"><span className="notice-mark" aria-hidden="true">!</span><div><h2>ใช้ตัวเลขสมมติเท่านั้น</h2><p>ห้ามใช้ค่าจากฉลากอาหารจริงหรือข้อมูลผู้ป่วย ผลนี้ใช้ตัดสินใจด้านอาหารหรือการรักษาไม่ได้</p></div></aside>

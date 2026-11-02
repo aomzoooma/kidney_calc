@@ -9,7 +9,7 @@ import os
 import sqlite3
 import tempfile
 import threading
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, DecimalException, InvalidOperation
 from pathlib import Path
 from typing import Annotated, Literal, Optional
@@ -101,6 +101,22 @@ class SeasoningInput(BaseModel):
     basis_quantity: Positive
     basis_unit: Literal['g', 'ml']
     nutrients: SeasoningNutrients
+
+
+class ManualIngredientInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    synthetic_only: Literal[True]
+    reviewed: Literal[True]
+    name: str = Field(min_length=1, max_length=150)
+    provider: str = Field(min_length=1, max_length=150)
+    source_version: str = Field(min_length=1, max_length=200)
+    source_date: Optional[date] = None
+    source_reference: str = Field(min_length=1, max_length=500)
+    provenance: str = Field(min_length=1, max_length=500)
+    basis_quantity: Positive
+    basis_unit: Literal['g', 'ml']
+    food_state: Literal['raw', 'cooked', 'as_sold']
+    nutrients: SeasoningNutrients = Field(default_factory=SeasoningNutrients)
 
 
 def _demo_store():
@@ -253,6 +269,32 @@ def search_saved_ingredients(q: str = Query(min_length=1, max_length=100)):
     # This lookup stays in the local SQLite store. It does not contact USDA or another service.
     return {'items': _demo_store().ingredients.search_reviewed(query),
             'local_only': True, 'reviewed_by_user': True}
+
+
+@app.post('/experimental/ingredients')
+async def save_manual_ingredient(request: Request):
+    if request.headers.get('content-type', '').split(';', 1)[0].strip().lower() != 'application/json':
+        raise HTTPException(status_code=415, detail='JSON content type required')
+    try:
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > 32768:
+                raise HTTPException(status_code=413, detail='Request too large')
+        payload = ManualIngredientInput.model_validate(json.loads(body))
+        return _demo_store().ingredients.create_reviewed(
+            name=payload.name, provider=payload.provider, version='1',
+            source_version=payload.source_version,
+            source_date=payload.source_date.isoformat() if payload.source_date else None,
+            retrieved_on=datetime.now(ZoneInfo('Asia/Bangkok')).date().isoformat(),
+            source_reference=payload.source_reference, provenance=payload.provenance,
+            basis_quantity=payload.basis_quantity, basis_unit=payload.basis_unit,
+            food_state=payload.food_state, reviewed=True, nutrients=payload.nutrients.model_dump(),
+        )
+    except (ValueError, DecimalException, UnicodeDecodeError, ValidationError) as exc:
+        raise HTTPException(status_code=422, detail='Invalid manual ingredient data') from exc
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail='Ingredient storage is unavailable') from exc
 
 
 @app.post('/experimental/seasonings')
