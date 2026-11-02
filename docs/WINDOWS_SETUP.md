@@ -40,13 +40,28 @@ npm run build --prefix web
 
 The OCR helper is an optional test-only tool, not an app dependency. Install it only for the separate [OCR smoke test](WINDOWS_OCR_TEST.md); do not add it to `requirements.txt` without review.
 
-To run the API for local development only:
+USDA food search requires `USDA_FDC_API_KEY` in the same PowerShell window that starts the API. For a short trial, use USDA's shared `DEMO_KEY` (limited to 30 requests per IP per hour and 50 per day). For regular use, request a personal key from the [USDA FoodData Central API guide](https://fdc.nal.usda.gov/api-guide/); USDA may deactivate keys found in public repositories. Choose one setup below before starting the API.
+
+For a short trial:
+
+```powershell
+$env:USDA_FDC_API_KEY = 'DEMO_KEY'
+```
+
+For a personal key, run this block; type the key at the hidden prompt. The key is placed in this PowerShell session's environment for the API process to use; environment values are plaintext to processes running as your account. Do not save it in a file, commit it, or share it in prompts or logs.
+
+```powershell
+$SecureKey = Read-Host 'USDA API key' -AsSecureString
+$KeyPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureKey)
+try { $env:USDA_FDC_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($KeyPointer) }
+finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($KeyPointer); $SecureKey.Dispose(); Remove-Variable SecureKey, KeyPointer }
+```
+
+Then start the API in that same window:
 
 ```powershell
 & $Python -m uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```
-
-USDA food search requires `USDA_FDC_API_KEY` in the same PowerShell window before starting the API. For a short trial, set USDA's shared `DEMO_KEY` (limited to 30 requests per IP per hour and 50 per day); for regular use, request a personal key from the [USDA FoodData Central API guide](https://fdc.nal.usda.gov/api-guide/). USDA may deactivate keys found in public repositories. Keep the key only in this PowerShell session: do not save it in a file, commit it, or share it in prompts or logs.
 
 The current `/health` route only confirms that the process responds. Do not bind to `0.0.0.0`, forward ports, or expose the API, Ollama, or database to a network. No authenticated patient routes or production setup have been implemented.
 
@@ -61,12 +76,7 @@ Set-Location C:\work\kidney_calc
 $DemoDir = Join-Path $env:LOCALAPPDATA 'KidneyCalcDemo'
 New-Item -ItemType Directory -Force $DemoDir | Out-Null
 $env:KIDNEY_EXPERIMENTAL_DB = Join-Path $DemoDir 'synthetic-demo.sqlite3'
-$env:USDA_FDC_API_KEY = 'DEMO_KEY'
-# For a personal key instead, enter it at the hidden prompt:
-# $SecureKey = Read-Host 'USDA API key' -AsSecureString
-# $KeyPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureKey)
-# try { $env:USDA_FDC_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($KeyPointer) }
-# finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($KeyPointer); $SecureKey.Dispose(); Remove-Variable SecureKey, KeyPointer }
+# Set USDA_FDC_API_KEY here using one of the two options above before starting the API.
 .\.venv\Scripts\python.exe -m uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```
 
