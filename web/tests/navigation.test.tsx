@@ -31,9 +31,9 @@ it('shows clear navigation for every app area and keeps usable flows reachable',
   expect(screen.getByRole('link', { name: 'สูตรอาหาร' }).getAttribute('aria-current')).toBe('page')
 
   fireEvent.click(screen.getByRole('link', { name: 'ผู้ป่วย' }))
-  expect(screen.getByRole('heading', { name: 'ผู้ป่วย' })).toBeTruthy()
-  expect(screen.getByText(/ยังไม่มีระบบสร้างหรือบันทึกโปรไฟล์/)).toBeTruthy()
-  expect(screen.queryByRole('textbox')).toBeNull()
+  expect(screen.getByRole('heading', { name: 'โปรไฟล์ข้อมูลสมมติ' })).toBeTruthy()
+  expect(screen.getByText(/ห้ามกรอกชื่อจริง เลขประจำตัว หรือข้อมูลผู้ป่วยจริง/)).toBeTruthy()
+  expect(screen.getByRole('textbox', { name: 'ชื่อเรียกข้อมูลสมมติ' })).toBeTruthy()
 
   fireEvent.click(screen.getByRole('link', { name: 'บันทึกอาหาร' }))
   expect(screen.getByRole('heading', { name: 'บันทึกอาหาร' })).toBeTruthy()
