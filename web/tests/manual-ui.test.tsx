@@ -104,7 +104,7 @@ describe('manual recipe UI', () => {
   it('blocks USDA records with unknown food state and explains how to recover', async () => {
     const fetchMock = vi.fn(async (url: string) => url.startsWith('/experimental/usda/search')
       ? { ok: true, json: async () => ({ items: [
-        { fdc_id: 88, description: 'Soup, HEALTHY CHOICE Chicken and Rice Soup, canned', source_type: 'Foundation', source_version: 'test-v1', food_state: null },
+        { fdc_id: 88, description: 'Soup, HEALTHY CHOICE Chicken and Rice Soup, canned, ready-to-serve', source_type: 'Foundation', source_version: 'test-v1', food_state: null },
         { fdc_id: 89, description: 'Soup, chicken, canned', source_type: 'Branded', source_version: 'test-v1', food_state: 'as_sold' },
       ] }) }
       : { ok: true, json: async () => ({ items: [] }) })
@@ -113,9 +113,9 @@ describe('manual recipe UI', () => {
     openRecipes()
     fireEvent.change(screen.getByLabelText('ชื่ออาหารหรือคำค้นภาษาไทยหรืออังกฤษ'), { target: { value: 'chicken and rice soup' } })
     fireEvent.click(screen.getByRole('button', { name: 'ค้นหา USDA' }))
-    const select = await screen.findByRole('button', { name: 'เลือกไม่ได้ · ไม่ระบุสภาพ' })
+    const select = await screen.findByRole('button', { name: 'เลือกไม่ได้ · ระบุสภาพไม่ได้' })
     expect((select as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.getByText(/รายการนี้ USDA ไม่ระบุสภาพอาหารที่ระบบต้องใช้คำนวณ/)).toBeTruthy()
+    expect(screen.getByText(/ระบบไม่สามารถระบุจากรายการ USDA นี้ได้ว่าเป็นอาหารดิบหรือสุก/)).toBeTruthy()
     expect((await screen.findByRole('button', { name: 'เลือกไม่ได้ · หมวดนี้ยังไม่รองรับ' }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.queryByText(/วัตถุดิบ 2/)).toBeNull()
   })
@@ -130,7 +130,7 @@ describe('manual recipe UI', () => {
     fireEvent.change(screen.getAllByLabelText(/ปริมาณที่ใช้/)[0], { target: { value: '100' } })
     fireEvent.click(screen.getByRole('checkbox', { name: /ยืนยันว่ากำลังทดสอบ/ }))
     fireEvent.click(screen.getByRole('button', { name: 'คำนวณสารอาหาร' }))
-    expect((await screen.findByRole('alert')).textContent).toContain('รายการ USDA นี้ไม่ระบุว่าอาหารดิบหรือสุก')
+    expect((await screen.findByRole('alert')).textContent).toContain('ระบบระบุสภาพดิบ/สุกจากรายการ USDA นี้ไม่ได้')
     expect(screen.queryByText(/USDA record does not identify/)).toBeNull()
   })
 
@@ -410,8 +410,8 @@ describe('manual recipe UI', () => {
     openRecipes()
     fireEvent.change(screen.getByLabelText('ชื่ออาหารหรือคำค้นภาษาไทยหรืออังกฤษ'), { target: { value: 'rice' } })
     fireEvent.click(screen.getByRole('button', { name: 'ค้นหา USDA' }))
-    expect((await screen.findByRole('button', { name: 'เลือกไม่ได้ · ไม่ระบุสภาพ' }) as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.getByText(/รายการนี้ USDA ไม่ระบุสภาพอาหารที่ระบบต้องใช้คำนวณ/)).toBeTruthy()
+    expect((await screen.findByRole('button', { name: 'เลือกไม่ได้ · ระบุสภาพไม่ได้' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText(/ระบบไม่สามารถระบุจากรายการ USDA นี้ได้ว่าเป็นอาหารดิบหรือสุก/)).toBeTruthy()
     expect(screen.queryByLabelText('แหล่งข้อมูลวัตถุดิบ 2')).toBeNull()
   })
 
