@@ -64,6 +64,61 @@ describe('manual recipe UI', () => {
     expect(fetchMock.mock.calls.some(([url]) => url === '/experimental/recipes/calculate')).toBe(false)
   })
 
+  it('collapses the previous ingredient, opens the new one, and preserves inputs on reopen', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ items: [] }) })))
+    render(<App />)
+    openRecipes()
+    const firstAmount = document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] input[type="number"]')!
+    fireEvent.change(screen.getByLabelText('ชื่อวัตถุดิบ'), { target: { value: 'ข้าวสวย' } })
+    fireEvent.change(firstAmount, { target: { value: '150' } })
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มวัตถุดิบ/ }))
+
+    const cards = Array.from(document.querySelectorAll<HTMLDetailsElement>('.ingredient-details'))
+    expect(cards[0].open).toBe(false)
+    expect(cards[1].open).toBe(true)
+    expect(cards[0].querySelector('summary')?.textContent).toContain('ข้าวสวย')
+    expect(cards[0].querySelector('summary')?.textContent).toContain('150 กรัม')
+    expect(cards[0].querySelector('summary')?.tabIndex).toBe(0)
+
+    fireEvent.click(cards[0].querySelector('summary')!)
+    expect(cards[0].open).toBe(true)
+    expect(cards[1].open).toBe(false)
+    expect(firstAmount.value).toBe('150')
+  })
+
+  it('opens the first collapsed ingredient when browser validation reports its hidden control', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ items: [] }) })))
+    render(<App />)
+    openRecipes()
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มวัตถุดิบ/ }))
+    const first = document.querySelector<HTMLDetailsElement>('[data-ingredient-index="0"]')!
+    const firstAmount = first.querySelector<HTMLInputElement>('input[required]')!
+    expect(first.open).toBe(false)
+    expect(firstAmount.checkValidity()).toBe(false)
+    await act(async () => { await Promise.resolve() })
+    expect(first.open).toBe(true)
+    expect(document.activeElement).toBe(firstAmount)
+  })
+
+  it('keeps the remaining ingredient values when a different card is removed', () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ items: [] }) })))
+    render(<App />)
+    openRecipes()
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มวัตถุดิบ/ }))
+    const second = document.querySelector<HTMLDetailsElement>('[data-ingredient-index="1"]')!
+    const secondName = second.querySelector<HTMLInputElement>('input[autocomplete="off"]')!
+    const secondAmount = second.querySelector<HTMLInputElement>('input[required]')!
+    fireEvent.change(secondName, { target: { value: 'ผักสมมติ' } })
+    fireEvent.change(secondAmount, { target: { value: '25' } })
+    fireEvent.click(screen.getByRole('button', { name: 'ลบวัตถุดิบ 1' }))
+    const remaining = document.querySelector<HTMLDetailsElement>('[data-ingredient-index="0"]')!
+    expect(remaining.open).toBe(true)
+    expect(remaining.querySelector('summary')?.textContent).toContain('ผักสมมติ')
+    expect(remaining.querySelector('summary')?.textContent).toContain('25 กรัม')
+    expect(remaining.querySelector<HTMLInputElement>('input[autocomplete="off"]')?.value).toBe('ผักสมมติ')
+    expect(remaining.querySelector<HTMLInputElement>('input[required]')?.value).toBe('25')
+  })
+
   it.each([
     ['editing an ingredient', () => fireEvent.change(screen.getAllByLabelText(/ปริมาณที่ใช้/)[0], { target: { value: '200' } })],
     ['adding an ingredient', () => fireEvent.click(screen.getByRole('button', { name: /เพิ่มวัตถุดิบ/ }))],
