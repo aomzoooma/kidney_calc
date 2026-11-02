@@ -1,0 +1,38 @@
+:root {
+  font-family: system-ui, -apple-system, "Noto Sans Thai", sans-serif;
+  color: #19382f;
+  background: #f5f8f6;
+  font-size: 18px;
+  line-height: 1.65;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+.app-shell { min-height: 100vh; display: flex; flex-direction: column; }
+.topbar { background: #fff; border-bottom: 1px solid #dfe9e3; }
+.brand { max-width: 42rem; margin: auto; padding: .8rem 1.25rem; font-weight: 750; color: #17583e; }
+.brand span { color: #62756c; font-size: .78rem; font-weight: 500; margin-left: .45rem; }
+main { width: 100%; max-width: 42rem; margin: 0 auto; padding: 2rem 1.25rem 2.5rem; flex: 1; }
+.intro { margin-bottom: 1.5rem; }
+.eyebrow { margin: 0; color: #26704e; font-weight: 700; }
+h1 { font-size: clamp(1.8rem, 8vw, 2.55rem); line-height: 1.3; margin: .45rem 0 .8rem; letter-spacing: -.025em; }
+h2 { font-size: 1.18rem; line-height: 1.45; margin: 0 0 .35rem; }
+p { margin: .4rem 0; }
+.notice { display: flex; gap: .8rem; border: 2px solid #a66a14; background: #fff8e9; border-radius: 1rem; padding: 1rem; margin: 1.5rem 0 2rem; }
+.notice-mark { display: grid; place-items: center; flex: 0 0 1.75rem; height: 1.75rem; color: #fff; background: #86510b; border-radius: 50%; font-weight: 800; line-height: 1; }
+.notice p { margin-bottom: 0; }
+.features { background: #fff; border: 1px solid #dfe9e3; border-radius: 1rem; padding: 1.25rem; }
+.feature-list { list-style: none; margin: .7rem 0 1rem; padding: 0; }
+.feature-list li { display: flex; align-items: baseline; gap: .8rem; padding: .65rem 0; border-bottom: 1px solid #edf1ee; }
+.feature-list li:last-child { border-bottom: 0; }
+.feature-list span { color: #26704e; font-size: .85rem; font-weight: 800; }
+.feature-list p { margin: 0; }
+.footnote { color: #53675e; font-size: .9rem; }
+footer { border-top: 1px solid #dfe9e3; color: #53675e; font-size: .82rem; }
+footer p { max-width: 42rem; margin: auto; padding: .9rem 1.25rem; }
+@media (min-width: 700px) {
+  main { padding-top: 3rem; }
+  .notice { padding: 1.2rem; }
+}
