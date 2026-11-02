@@ -16,8 +16,10 @@ type USDAFood = { fdc_id: number; description: string; source_type: string; sour
 type FoodTextTranslation = { sourceText: string; translation: string; targetLanguage: 'en' | 'th' }
 type SavedRecipeSummary = { id: number; name: string; favorite: boolean }
 type SavedRecipeIngredient = {
-  ingredient_version_id: number; amount: string; unit: Ingredient['unit']; food_state: FoodState;
-  ingredient_name: string; basis_quantity: string; basis_unit: Ingredient['unit']; reviewed: true;
+  ingredient_version_id: number; seasoning_version_id: number | null; amount: string; unit: Ingredient['unit']; food_state: FoodState;
+  ingredient_name: string; brand?: string | null; basis_quantity: string; basis_unit: Ingredient['unit']; reviewed: true;
+  provider?: string; source_version?: string; source_date?: string | null; retrieved_on?: string;
+  source_reference?: string; provenance?: string;
 } & Record<NutrientKey, string | null>
 type SavedRecipeDetail = SavedRecipeSummary & { ingredients: SavedRecipeIngredient[] }
 type USDAIngredientPreview = {
@@ -76,10 +78,17 @@ function isSavedRecipeDetail(value: unknown): value is SavedRecipeDetail {
   return ingredients.length > 0 && ingredients.every(value => {
     if (!value || typeof value !== 'object') return false
     const item = value as Record<string, unknown>
-    return Number.isInteger(item.ingredient_version_id) && Number(item.ingredient_version_id) > 0
+    const hasSeasoningMarker = item.seasoning_version_id == null
+      || (Number.isInteger(item.seasoning_version_id) && Number(item.seasoning_version_id) > 0)
+    const seasoningVersionId = item.seasoning_version_id ?? null
+    const isSeasoning = Number.isInteger(seasoningVersionId) && Number(seasoningVersionId) > 0
+    return hasSeasoningMarker
+      && Number.isInteger(item.ingredient_version_id) && Number(item.ingredient_version_id) > 0
+      && (!isSeasoning || Number(seasoningVersionId) === Number(item.ingredient_version_id))
       && Number.isFinite(Number(item.amount)) && Number(item.amount) > 0
       && ['g', 'ml'].includes(String(item.unit)) && ['g', 'ml'].includes(String(item.basis_unit))
       && ['raw', 'cooked', 'as_sold'].includes(String(item.food_state))
+      && (!isSeasoning || (item.food_state === 'as_sold' && item.unit === item.basis_unit))
       && typeof item.ingredient_name === 'string' && Number.isFinite(Number(item.basis_quantity))
       && Number(item.basis_quantity) > 0 && item.reviewed === true
   })
@@ -162,7 +171,8 @@ export function App() {
   const translatedQueryTooLong = translatedQuery?.targetLanguage === 'en'
     && translatedQuery.translation.trim().length > 200
   const recipeUsesReviewedIngredients = ingredients.length > 0
-    && ingredients.every(item => item.source === 'saved' && item.ingredientVersionId !== null)
+    && ingredients.every(item => (item.source === 'saved' && item.ingredientVersionId !== null)
+      || (item.source === 'seasoning' && item.seasoningVersionId !== null && item.state === 'as_sold'))
   const recipeAmountsValid = ingredients.every(item => Number.isFinite(Number(item.amount)) && Number(item.amount) > 0)
   const canSaveRecipe = recipeDraftChanged && recipeUsesReviewedIngredients && recipeAmountsValid && Boolean(recipeName.trim())
 
@@ -462,8 +472,10 @@ export function App() {
       revision.current++
       setIngredients(payload.ingredients.map(item => ({
         ...newIngredient(), name: item.ingredient_name, amount: item.amount, unit: item.unit,
-        state: item.food_state, reference: item.basis_quantity, source: 'saved',
-        ingredientVersionId: item.ingredient_version_id,
+        state: item.food_state, reference: item.basis_quantity,
+        source: item.seasoning_version_id != null ? 'seasoning' : 'saved',
+        ingredientVersionId: item.seasoning_version_id != null ? null : item.ingredient_version_id,
+        seasoningVersionId: item.seasoning_version_id ?? null,
         values: Object.fromEntries(nutrients.map(([key]) => [key, item[key] ?? ''])) as Ingredient['values'],
       })))
       setRecipeName(payload.name); setSavedRecipeName(payload.name); setSavedRecipeId(payload.id)
@@ -482,8 +494,10 @@ export function App() {
     const name = recipeName.trim()
     const submittedRevision = revision.current
     const recipeIngredients = ingredients.map(item => ({
-      ingredient_version_id: item.ingredientVersionId!, amount: item.amount,
-      unit: item.unit, food_state: item.state,
+      ...(item.source === 'seasoning' && item.seasoningVersionId !== null
+        ? { seasoning_version_id: item.seasoningVersionId }
+        : { ingredient_version_id: item.ingredientVersionId! }),
+      amount: item.amount, unit: item.unit, food_state: item.state,
     }))
     setRecipeSaveBusy(true); setRecipeError(''); setRecipeStatus('')
     let ingredientsSaved = false
@@ -495,7 +509,11 @@ export function App() {
           body: JSON.stringify({ synthetic_only: true, name, ingredients: recipeIngredients }),
         })
         const payload = await response.json()
-        if (!response.ok || !Number.isInteger(payload.id)) throw new Error('Recipe save failed')
+        if (!response.ok) {
+          if (response.status === 422 && typeof payload.detail === 'string' && /unit and food state must match/i.test(payload.detail)) throw new Error('recipe-source-measure-mismatch')
+          throw new Error('Recipe save failed')
+        }
+        if (!Number.isInteger(payload.id)) throw new Error('Recipe save failed')
         id = payload.id as number
         setSavedRecipeId(id)
         ingredientsSaved = true
@@ -504,7 +522,11 @@ export function App() {
           method: 'PUT', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ synthetic_only: true, ingredients: recipeIngredients }),
         })
-        if (!response.ok) throw new Error('Ingredient update failed')
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}))
+          if (response.status === 422 && typeof payload.detail === 'string' && /unit and food state must match/i.test(payload.detail)) throw new Error('recipe-source-measure-mismatch')
+          throw new Error('Ingredient update failed')
+        }
         ingredientsSaved = true
         if (savedRecipeName !== name) {
           const renamed = await fetch(`/experimental/recipes/${id}`, {
@@ -522,10 +544,14 @@ export function App() {
       setSavedRecipeName(name)
       if (submittedRevision === revision.current) setRecipeDraftChanged(false)
       setRecipeStatus(savedRecipeId === null ? `บันทึกสูตร “${name}” แล้ว` : `บันทึกการเปลี่ยนแปลงของ “${name}” แล้ว`)
-    } catch {
-      setRecipeError(ingredientsSaved
-        ? 'บันทึกส่วนผสมแล้ว แต่เปลี่ยนชื่อสูตรไม่สำเร็จ · ลองบันทึกอีกครั้ง'
-        : 'บันทึกสูตรไม่สำเร็จ · ตรวจการเชื่อมต่อแล้วลองอีกครั้ง')
+    } catch (cause) {
+      if (cause instanceof Error && cause.message === 'recipe-source-measure-mismatch') {
+        setRecipeError('ปริมาณหรือสภาพอาหารไม่ตรงกับฐานของรายการที่ตรวจไว้ · ใช้หน่วยและสภาพที่แสดงในแถวนี้ ระบบไม่แปลงกรัมเป็นมิลลิลิตร')
+      } else {
+        setRecipeError(ingredientsSaved
+          ? 'บันทึกส่วนผสมแล้ว แต่เปลี่ยนชื่อสูตรไม่สำเร็จ · ลองบันทึกอีกครั้ง'
+          : 'บันทึกสูตรไม่สำเร็จ · ตรวจการเชื่อมต่อแล้วลองอีกครั้ง')
+      }
     } finally {
       setRecipeSaveBusy(false)
     }
@@ -751,7 +777,7 @@ export function App() {
             <label>แหล่งข้อมูล <select aria-label={`แหล่งข้อมูลวัตถุดิบ ${index + 1}`} value={item.source} onChange={e => selectSource(index, e.target.value as IngredientSource)}><option value="manual">กรอกข้อมูลเอง</option><option value="usda">USDA รายการอ้างอิง · แหล่งรอง</option><option value="seasoning">เครื่องปรุงที่บันทึกไว้</option><option value="saved" disabled>วัตถุดิบที่บันทึกไว้ · รุ่นที่เลือก</option></select></label>
             {item.source === 'seasoning' && <label>เลือกเครื่องปรุงที่บันทึกไว้ <select value={item.seasoningVersionId ?? ''} onChange={e => selectSeasoning(index, e.target.value)}><option value="">เลือกเครื่องปรุง</option>{savedSeasonings.map(seasoning => <option key={seasoning.version_id} value={seasoning.version_id}>{seasoning.name}{seasoning.brand ? ` · ${seasoning.brand}` : ''} (รุ่น {seasoning.version_id})</option>)}</select></label>}
             {item.source === 'manual' && <label>ชื่อวัตถุดิบ <input value={item.name} onChange={e => update(index, { name: e.target.value })} placeholder="เช่น ข้าวสวย" autoComplete="off" /></label>}
-            {item.seasoningVersionId !== null && <p className="footnote">ใช้ข้อมูลที่บันทึกไว้จากรุ่นนี้ ระบบคำนวณจะอ่านค่าจากฐานข้อมูลโดยตรง</p>}
+            {item.seasoningVersionId !== null && <p className="footnote">เครื่องปรุงที่ตรวจแล้ว · รุ่น {item.seasoningVersionId} · ใช้ปริมาณเป็น {item.unit === 'g' ? 'กรัม' : 'มล.'} ตามฐานของรุ่นนี้ ({item.reference} {item.unit === 'g' ? 'กรัม' : 'มล.'}) · ระบบไม่แปลงกรัมเป็นมิลลิลิตร · ค่าจะอ่านจากรุ่นเดิมในเครื่อง</p>}
             {item.ingredientVersionId !== null && <p className="footnote">รายการในเครื่อง · รุ่น {item.ingredientVersionId} · แหล่ง/วันที่อ้างอิงแสดงจากรายการค้นหา · คำนวณจะอ่านค่าจากรุ่นนี้ในฐานข้อมูลโดยตรง</p>}
             {item.fdcId !== null && <p className="footnote">USDA FoodData Central · รายการอ้างอิงไม่ใช่สินค้าแบรนด์ · ID {item.fdcId} · สภาพ: {foodStateLabel(item.fdcState)} · ค่ารายละเอียดจะดึงจาก USDA ฝั่งเซิร์ฟเวอร์เมื่อคำนวณ</p>}
             {item.fdcId !== null && <div className="thai-query-suggestion">
@@ -785,7 +811,7 @@ export function App() {
               if (recipeSaveBusy || recipeOpenBusyId !== null || usdaReview?.saving) return
               revision.current++; setRecipeName(event.target.value); setRecipeDraftChanged(true); setRecipeStatus(''); setRecipeError('')
             }} /></label>
-            {!recipeUsesReviewedIngredients && <p role="note">บันทึกสูตรได้เมื่อทุกส่วนผสมเป็นวัตถุดิบที่บันทึกและตรวจแล้ว · รายการกรอกเองและเครื่องปรุงที่บันทึกแยกยังใช้บันทึกสูตรไม่ได้ ส่วน USDA ต้องตรวจข้อมูลและบันทึกเป็นวัตถุดิบในเครื่องก่อน · แบบร่างยังอยู่และคำนวณต่อได้</p>}
+            {!recipeUsesReviewedIngredients && <p role="note">บันทึกสูตรได้เมื่อทุกรายการเป็นวัตถุดิบหรือเครื่องปรุงที่บันทึกและตรวจแล้ว · รายการกรอกเองยังบันทึกเป็นสูตรไม่ได้ ส่วน USDA ต้องตรวจและบันทึกเป็นรายการในเครื่องก่อน · แบบร่างยังอยู่และคำนวณต่อได้</p>}
             {recipeUsesReviewedIngredients && !recipeAmountsValid && <p role="note">กรอกปริมาณที่มากกว่าศูนย์ในทุกวัตถุดิบก่อนบันทึก</p>}
             {recipeUsesReviewedIngredients && recipeAmountsValid && !recipeName.trim() && <p role="note">ใส่ชื่อสูตรก่อนบันทึก</p>}
             <button type="button" className="submit-button" disabled={!canSaveRecipe || recipeSaveBusy || recipeOpenBusyId !== null || recipeFavoriteBusyId !== null || usdaReview?.saving === true} onClick={() => void saveRecipe()}>{recipeSaveBusy ? 'กำลังบันทึก…' : savedRecipeId === null ? 'บันทึกสูตร' : 'บันทึกการเปลี่ยนแปลง'}</button>
