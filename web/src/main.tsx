@@ -29,12 +29,14 @@ export function App() {
   const [page, setPage] = useState<PageId>(readPage)
   const [ingredientsVisited, setIngredientsVisited] = useState(() => readPage() === 'ingredients')
   const [ingredients, setIngredients] = useState([newIngredient()])
+  const [openIngredient, setOpenIngredient] = useState(0)
   const [savedSeasonings, setSavedSeasonings] = useState<SavedSeasoning[]>([])
   const [seasoningsError, setSeasoningsError] = useState('')
   const [portion, setPortion] = useState('1')
   const [result, setResult] = useState<Result | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const invalidHandled = useRef(false)
   const revision = useRef(0)
 
   useEffect(() => {
@@ -71,6 +73,22 @@ export function App() {
   function update(index: number, changes: Partial<Ingredient>) {
     revision.current++
     setIngredients(current => current.map((item, i) => i === index ? { ...item, ...changes } : item))
+    setResult(null)
+  }
+
+  function addIngredient() {
+    revision.current++
+    setOpenIngredient(ingredients.length)
+    setIngredients(items => [...items, newIngredient()])
+    setResult(null)
+  }
+
+  function removeIngredient(index: number) {
+    revision.current++
+    const remaining = ingredients.filter((_, i) => i !== index)
+    setIngredients(remaining)
+    setOpenIngredient(current => current === index ? Math.min(index, remaining.length - 1)
+      : current > index ? current - 1 : current)
     setResult(null)
   }
 
@@ -134,11 +152,30 @@ export function App() {
       {page === 'recipes' && <section aria-labelledby="recipe-title">
         <div className="page-intro"><h1 id="recipe-title">สูตรอาหาร</h1><p>เครื่องคำนวณทดลองจากตัวเลขสมมติ ยังไม่มีระบบบันทึกสูตร</p></div>
         <aside className="notice" role="note"><span className="notice-mark" aria-hidden="true">!</span><div><h2>ใช้ตัวเลขสมมติเท่านั้น</h2><p>ห้ามใช้ค่าจากฉลากอาหารจริงหรือข้อมูลผู้ป่วย ผลนี้ใช้ตัดสินใจด้านอาหารหรือการรักษาไม่ได้</p></div></aside>
-        <form onSubmit={calculate}>
-          <section className="section-heading"><h2>รายการวัตถุดิบ</h2><button type="button" className="add-button" onClick={() => { revision.current++; setIngredients(items => [...items, newIngredient()]); setResult(null) }}>＋ เพิ่มวัตถุดิบ</button></section>
-          {ingredients.map((item, index) => <fieldset className="ingredient-card" key={index}>
-            <legend>วัตถุดิบ {index + 1}</legend>
-            {ingredients.length > 1 && <button type="button" className="remove-button" aria-label={`ลบวัตถุดิบ ${index + 1}`} onClick={() => { revision.current++; setIngredients(items => items.filter((_, i) => i !== index)); setResult(null) }}>ลบ</button>}
+        <form onSubmit={calculate} onInvalidCapture={event => {
+          if (invalidHandled.current) return
+          invalidHandled.current = true
+          const target = event.target as HTMLElement
+          const card = target.closest<HTMLElement>('[data-ingredient-index]')
+          if (!card) {
+            queueMicrotask(() => { invalidHandled.current = false })
+            return
+          }
+          setOpenIngredient(Number(card.dataset.ingredientIndex))
+          queueMicrotask(() => {
+            target.focus()
+            invalidHandled.current = false
+          })
+        }}>
+          <section className="section-heading"><h2>รายการวัตถุดิบ</h2><button type="button" className="add-button" onClick={addIngredient}>＋ เพิ่มวัตถุดิบ</button></section>
+          {ingredients.map((item, index) => <div className="ingredient-card" key={index}>
+            <details className="ingredient-details" data-ingredient-index={index} open={openIngredient === index}>
+              <summary className="ingredient-summary" onClick={event => {
+                event.preventDefault()
+                setOpenIngredient(current => current === index ? -1 : index)
+              }}><span>{item.name.trim() || `วัตถุดิบ ${index + 1}`}</span><span>{item.amount ? `${item.amount} ${item.unit === 'g' ? 'กรัม' : 'มล.'}` : 'ยังไม่ระบุปริมาณ'}</span></summary>
+              <fieldset className="ingredient-fields">
+            <legend className="visually-hidden">วัตถุดิบ {index + 1}</legend>
             <label>เลือกเครื่องปรุงที่บันทึกไว้ <select value={item.seasoningVersionId ?? ''} onChange={e => selectSeasoning(index, e.target.value)}><option value="">กรอกวัตถุดิบสมมติเอง</option>{savedSeasonings.map(seasoning => <option key={seasoning.version_id} value={seasoning.version_id}>{seasoning.name}{seasoning.brand ? ` · ${seasoning.brand}` : ''} (รุ่น {seasoning.version_id})</option>)}</select></label>
             {item.seasoningVersionId === null && <label>ชื่อวัตถุดิบ <input value={item.name} onChange={e => update(index, { name: e.target.value })} placeholder="เช่น ข้าวสวย" autoComplete="off" /></label>}
             {item.seasoningVersionId !== null && <p className="footnote">ใช้ข้อมูลที่บันทึกไว้จากรุ่นนี้ ระบบคำนวณจะอ่านค่าจากฐานข้อมูลโดยตรง</p>}
@@ -150,7 +187,10 @@ export function App() {
             <div className="nutrient-grid"><p className="subheading">สารอาหารในปริมาณอ้างอิง <span>เว้นว่างได้เมื่อไม่ทราบ</span></p>
               {nutrients.map(([key, label, unit]) => <label key={key}>{label} <span className="nutrient-unit"><input inputMode="decimal" type="number" min="0" step="any" value={item.values[key]} readOnly={item.seasoningVersionId !== null} onChange={e => update(index, { values: { ...item.values, [key]: e.target.value } })} placeholder="ไม่ทราบ" /><span>{unit}</span></span></label>)}
             </div>
-          </fieldset>)}
+              </fieldset>
+            </details>
+            {ingredients.length > 1 && <button type="button" className="remove-button" aria-label={`ลบวัตถุดิบ ${index + 1}`} onClick={() => removeIngredient(index)}>ลบ</button>}
+          </div>)}
           <section className="portion-card"><label htmlFor="portion">สัดส่วนที่เสิร์ฟ</label><div><input id="portion" required inputMode="decimal" type="number" min="0.00000001" max="1" step="any" value={portion} onChange={e => { revision.current++; setPortion(e.target.value); setResult(null) }} /><span>ส่วนของสูตรทั้งหมด (0–1)</span></div></section>
           <label className="attestation"><input type="checkbox" required /> ยืนยันว่าข้อมูลทั้งหมดเป็นตัวเลขสมมติ ไม่ได้ใช้ค่าจากฉลากอาหารจริงหรือข้อมูลผู้ป่วย</label>
           <button className="submit-button" type="submit" disabled={busy}>{busy ? 'กำลังคำนวณ…' : 'คำนวณสารอาหาร'}</button>
