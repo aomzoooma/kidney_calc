@@ -98,6 +98,68 @@ describe('manual recipe UI', () => {
     ] })
   })
 
+  it('saves and reopens a custom recipe with the exact reviewed seasoning version and measure', async () => {
+    const seasoning = { ingredient_id: 8, version_id: 42, name: 'น้ำปลา', brand: 'ฉลากสมมติ', basis_quantity: '15', basis_unit: 'ml',
+      reviewed: true, nutrients: { energy_kcal: null, protein_g: null, sodium_mg: '900', potassium_mg: null, phosphorus_mg: null } }
+    const detail = { id: 7, name: 'แกงสมมติ', favorite: false, ingredients: [{ ingredient_version_id: 42,
+      seasoning_version_id: 42, amount: '22.5', unit: 'ml', food_state: 'as_sold', ingredient_name: 'น้ำปลา', brand: 'ฉลากสมมติ',
+      basis_quantity: '15', basis_unit: 'ml', reviewed: true, provider: 'ฉลากสมมติ', source_version: 'user-reviewed label',
+      source_date: null, retrieved_on: '2026-11-03', source_reference: 'synthetic label fixture', provenance: 'user-entered label',
+      energy_kcal: null, protein_g: null, sodium_mg: '900', potassium_mg: null, phosphorus_mg: null }] }
+    let replacementAttempts = 0
+    const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/experimental/seasonings') return { ok: true, json: async () => ({ items: [seasoning] }) }
+      if (url === '/experimental/recipes' && options?.method === 'POST') return { ok: true, json: async () => ({ id: 7, name: 'แกงสมมติ' }) }
+      if (url === '/experimental/recipes/7/ingredients' && options?.method === 'PUT') {
+        replacementAttempts++
+        return replacementAttempts === 1
+          ? { ok: false, status: 422, json: async () => ({ detail: 'recipe amount unit and food state must match the source version' }) }
+          : { ok: true, json: async () => ({ ingredients_updated: true }) }
+      }
+      if (url === '/experimental/recipes/7') return { ok: true, json: async () => detail }
+      if (url === '/experimental/recipes') return { ok: true, json: async () => ({ items: [{ id: 7, name: 'แกงสมมติ', favorite: false }] }) }
+      return { ok: true, json: async () => response }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getByLabelText('แหล่งข้อมูลวัตถุดิบ 1'), { target: { value: 'seasoning' } })
+    await screen.findByRole('option', { name: /น้ำปลา · ฉลากสมมติ \(รุ่น 42\)/ })
+    fireEvent.change(screen.getByLabelText('เลือกเครื่องปรุงที่บันทึกไว้'), { target: { value: '42' } })
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] .field-grid input[type="number"]')!, { target: { value: '22.5' } })
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มวัตถุดิบ/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'ลบวัตถุดิบ 2' }))
+    fireEvent.change(screen.getByLabelText('ชื่อสูตร'), { target: { value: 'แกงสมมติ' } })
+    expect(screen.getByText(/เครื่องปรุงที่ตรวจแล้ว · รุ่น 42 · ใช้ปริมาณเป็น มล\. ตามฐานของรุ่นนี้ \(15 มล\.\)/)).toBeTruthy()
+    expect(screen.getByText(/ระบบไม่แปลงกรัมเป็นมิลลิลิตร/)).toBeTruthy()
+    expect((screen.getByLabelText(/หน่วยปริมาณ/) as HTMLSelectElement).value).toBe('ml')
+    expect((screen.getByLabelText(/หน่วยปริมาณ/) as HTMLSelectElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกสูตร' }))
+    await screen.findByText('บันทึกสูตร “แกงสมมติ” แล้ว')
+    const createCall = fetchMock.mock.calls.find(([url, options]) => url === '/experimental/recipes' && options?.method === 'POST')
+    const createBody = JSON.parse(String(createCall?.[1]?.body))
+    expect(createBody.ingredients).toEqual([{ seasoning_version_id: 42, amount: '22.5', unit: 'ml', food_state: 'as_sold' }])
+    expect(createBody.ingredients[0]).not.toHaveProperty('ingredient_version_id')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'เปิดสูตรนี้' }))
+    await screen.findByDisplayValue('แกงสมมติ')
+    expect((screen.getByLabelText('แหล่งข้อมูลวัตถุดิบ 1') as HTMLSelectElement).value).toBe('seasoning')
+    expect((screen.getByLabelText('เลือกเครื่องปรุงที่บันทึกไว้') as HTMLSelectElement).value).toBe('42')
+    expect((document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] .field-grid input[type="number"]')!).value).toBe('22.5')
+    expect((screen.getByLabelText(/หน่วยปริมาณ/) as HTMLSelectElement).value).toBe('ml')
+    expect((screen.getByLabelText('สภาพอาหาร') as HTMLSelectElement).value).toBe('as_sold')
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] .field-grid input[type="number"]')!, { target: { value: '30' } })
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการเปลี่ยนแปลง' }))
+    expect(await screen.findByText(/ปริมาณหรือสภาพอาหารไม่ตรงกับฐานของรายการที่ตรวจไว้/)).toBeTruthy()
+    expect((document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] .field-grid input[type="number"]')!).value).toBe('30')
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการเปลี่ยนแปลง' }))
+    await screen.findByText('บันทึกการเปลี่ยนแปลงของ “แกงสมมติ” แล้ว')
+    const replaceCall = fetchMock.mock.calls.findLast(([url, options]) => url === '/experimental/recipes/7/ingredients' && options?.method === 'PUT')
+    const replaceBody = JSON.parse(String(replaceCall?.[1]?.body))
+    expect(replaceBody.ingredients).toEqual([{ seasoning_version_id: 42, amount: '30', unit: 'ml', food_state: 'as_sold' }])
+    expect(replaceBody.ingredients[0]).not.toHaveProperty('ingredient_version_id')
+  })
+
   it('does not let a delayed initial recipe list erase a newly created recipe', async () => {
     let releaseList!: (value: { ok: boolean; json: () => Promise<{ items: object[] }> }) => void
     const listPending = new Promise<{ ok: boolean; json: () => Promise<{ items: object[] }> }>(resolve => { releaseList = resolve })
