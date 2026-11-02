@@ -15,6 +15,23 @@ const emptyValues = (): Ingredient['values'] => ({ energy_kcal: '', protein_g: '
 const newIngredient = (): Ingredient => ({ name: '', amount: '', unit: 'g', state: 'raw', reference: '100', values: emptyValues(), source: 'manual', seasoningVersionId: null, ingredientVersionId: null, fdcId: null, fdcState: null })
 const stateNames: Record<FoodState, string> = { raw: 'ดิบ', cooked: 'สุก', as_sold: 'ตามสภาพที่ซื้อ' }
 const foodStateLabel = (state: FoodState | null) => state ? stateNames[state] : 'ไม่ระบุสภาพ · ยังใช้คำนวณไม่ได้'
+// Checked Thai food/condiment terms against Mahidol's ASEAN bilingual tables and
+// Department of Health condiment vocabulary. These expand the query only; they
+// never translate, rank, or select a USDA record.
+const thaiUsdaSearchTerms: Record<string, string> = {
+  'อกไก่': 'chicken breast',
+  'น่องไก่': 'chicken drumstick',
+  'สะโพกไก่': 'chicken thigh',
+  'หมูสันใน': 'pork tenderloin',
+  'น้ำปลา': 'fish sauce',
+  'ซีอิ๊วขาว': 'light soy sauce',
+  'ซีอิ๊วดำ': 'dark soy sauce',
+  'ซอสหอยนางรม': 'oyster sauce',
+  'กะปิ': 'fermented shrimp paste',
+}
+const broadThaiUsdaSearchChoices: Record<string, string[]> = {
+  'ไก่': ['chicken breast', 'chicken thigh', 'chicken drumstick'],
+}
 const pages = [
   { id: 'home', label: 'หน้าหลัก', compact: 'หน้าแรก' },
   { id: 'patients', label: 'ผู้ป่วย', compact: 'ผู้ป่วย' },
@@ -41,6 +58,7 @@ export function App() {
   const [savedSearchError, setSavedSearchError] = useState('')
   const [seasoningsError, setSeasoningsError] = useState('')
   const [usdaQuery, setUsdaQuery] = useState('')
+  const [selectedThaiSearchChoice, setSelectedThaiSearchChoice] = useState('')
   const [usdaFoods, setUsdaFoods] = useState<USDAFood[]>([])
   const [usdaError, setUsdaError] = useState('')
   const [usdaBusy, setUsdaBusy] = useState(false)
@@ -52,6 +70,10 @@ export function App() {
   const revision = useRef(0)
   const savedSearchRevision = useRef(0)
   const usdaSearchRevision = useRef(0)
+  const normalizedUsdaQuery = usdaQuery.trim().replace(/\s+/g, ' ')
+  const suggestedUsdaQuery = Object.hasOwn(thaiUsdaSearchTerms, normalizedUsdaQuery) ? thaiUsdaSearchTerms[normalizedUsdaQuery] : undefined
+  const broadThaiChoices = Object.hasOwn(broadThaiUsdaSearchChoices, normalizedUsdaQuery) ? broadThaiUsdaSearchChoices[normalizedUsdaQuery] : undefined
+  const unsupportedThaiQuery = /[\u0E00-\u0E7F]/.test(normalizedUsdaQuery) && !suggestedUsdaQuery && !broadThaiChoices
 
   useEffect(() => {
     const syncPage = () => {
@@ -160,9 +182,9 @@ export function App() {
     setResult(null)
   }
 
-  async function searchUSDA() {
+  async function searchUSDA(searchTerm = usdaQuery) {
     const requestRevision = ++usdaSearchRevision.current
-    const query = usdaQuery.trim()
+    const query = searchTerm.trim()
     setUsdaBusy(true); setUsdaError(''); setUsdaFoods([])
     try {
       const response = await fetch(`/experimental/usda/search?q=${encodeURIComponent(query)}`)
@@ -179,6 +201,15 @@ export function App() {
   function updateUSDAQuery(query: string) {
     usdaSearchRevision.current++
     setUsdaQuery(query)
+    setSelectedThaiSearchChoice('')
+    setUsdaFoods([])
+    setUsdaError('')
+    setUsdaBusy(false)
+  }
+
+  function updateThaiSearchChoice(choice: string) {
+    usdaSearchRevision.current++
+    setSelectedThaiSearchChoice(choice)
     setUsdaFoods([])
     setUsdaError('')
     setUsdaBusy(false)
@@ -281,10 +312,14 @@ export function App() {
           <section className="usda-search" aria-label="แหล่งข้อมูลรอง USDA">
             <h2>แหล่งข้อมูลรอง: USDA FoodData Central</h2>
             <p>ใช้เมื่อไม่มีรายการที่บันทึกไว้เท่านั้น · เป็นข้อมูลอ้างอิง USDA ภาษาอังกฤษ (Foundation / SR Legacy) ไม่ใช่การแปลหรือเทียบอาหารไทย · คำค้นจะถูกส่งไป USDA จึงห้ามใส่ชื่อผู้ป่วยหรือข้อมูลส่วนบุคคล</p>
-            <label>ชื่ออาหารภาษาอังกฤษ <input value={usdaQuery} onChange={e => updateUSDAQuery(e.target.value)} maxLength={200} autoComplete="off" /></label>
-            <button type="button" className="add-button" disabled={usdaBusy || !usdaQuery.trim()} onClick={() => void searchUSDA()}>{usdaBusy ? 'กำลังค้นหา…' : 'ค้นหา USDA'}</button>
+            <label>ชื่ออาหารหรือคำค้นภาษาไทยหรืออังกฤษ <input value={usdaQuery} onChange={e => updateUSDAQuery(e.target.value)} maxLength={200} autoComplete="off" /></label>
+            {suggestedUsdaQuery && <div className="thai-query-suggestion" role="status"><span>คำค้นอังกฤษแนะนำสำหรับ “{normalizedUsdaQuery}”</span><strong>{suggestedUsdaQuery}</strong><small>คำแนะนำใช้ค้นหาเท่านั้น · ชื่อผลลัพธ์คงตาม USDA</small></div>}
+            {broadThaiChoices && <div className="thai-query-suggestion" role="group" aria-label={`เลือกส่วนของอาหารสำหรับ ${normalizedUsdaQuery}`}><span>คำว่า “{normalizedUsdaQuery}” กว้างเกินไป · เลือกส่วนที่ต้องการค้นหา</span>{broadThaiChoices.map(choice => <button type="button" className="thai-query-choice" key={choice} aria-pressed={selectedThaiSearchChoice === choice} onClick={() => updateThaiSearchChoice(choice)}>{choice}</button>)}<small>{selectedThaiSearchChoice ? `เลือกคำค้น: ${selectedThaiSearchChoice}` : 'เลือกคำค้นก่อนค้นหา'} · ชื่อผลลัพธ์คงตาม USDA</small></div>}
+            {unsupportedThaiQuery && <p className="thai-query-warning" role="note">ยังไม่มีคำค้นไทยที่ชัดเจนสำหรับคำนี้ · ลองระบุชนิดหรือส่วนอาหารให้ชัดขึ้น</p>}
+            <p>ตรวจชื่อ USDA และสภาพ “ดิบ” หรือ “สุก” ก่อนเพิ่ม · หากไม่ระบุสภาพ จะคำนวณไม่ได้</p>
+            <button type="button" className="add-button" disabled={usdaBusy || !usdaQuery.trim() || unsupportedThaiQuery || Boolean(broadThaiChoices && !selectedThaiSearchChoice)} onClick={() => void searchUSDA(selectedThaiSearchChoice || suggestedUsdaQuery || usdaQuery)}>{usdaBusy ? 'กำลังค้นหา…' : suggestedUsdaQuery || selectedThaiSearchChoice ? 'ค้นหา USDA ด้วยคำแนะนำ' : 'ค้นหา USDA'}</button>
             {usdaError && <p className="error" role="alert">{usdaError}</p>}
-            <ul className="usda-results">{usdaFoods.map(food => <li key={food.fdc_id}><strong>{food.description}</strong><small>USDA FDC · รายการอ้างอิงไม่ใช่สินค้าแบรนด์ · {food.source_type} · {foodStateLabel(food.food_state)} · {food.source_version ?? 'รุ่นข้อมูลไม่ระบุ'} · ID {food.fdc_id}</small>
+            <ul className="usda-results">{usdaFoods.map(food => <li key={food.fdc_id}><strong>{food.description}</strong><span className="usda-food-state">สภาพอาหาร: {foodStateLabel(food.food_state)}</span><small>USDA FDC · รายการอ้างอิงไม่ใช่สินค้าแบรนด์ · {food.source_type} · {food.source_version ?? 'รุ่นข้อมูลไม่ระบุ'} · ID {food.fdc_id}</small>
               <button type="button" className="add-button" onClick={() => addUSDAFood(food)}>เพิ่มเป็นรายการใหม่</button></li>)}</ul>
           </section>
           <section className="section-heading"><h2>รายการวัตถุดิบ</h2><button type="button" className="add-button" onClick={addIngredient}>＋ เพิ่มวัตถุดิบ</button></section>
