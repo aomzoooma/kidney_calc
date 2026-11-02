@@ -66,7 +66,24 @@ input::placeholder { color: #87958d; }
 .results li strong { text-align: right; }
 .results li small { grid-column: 1/-1; color: var(--muted); font-size: .78rem; }
 .footnote { color: var(--muted); font-size: .85rem; margin: .8rem 0 0; }
+.seasoning-flow { margin: 1.5rem 0 2rem; padding: 1rem; border: 1px solid var(--line); border-radius: 1rem; background: #fff; box-shadow: 0 3px 12px #173d2b0a; }
+.seasoning-heading { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: .8rem; }
+.seasoning-heading h2 { margin-top: .15rem; }
+.notice-compact { margin: .8rem 0; border-width: 1px; border-radius: .7rem; }
+.notice-compact h3, .ocr-text h3, .seasoning-review h3, .saved-seasonings h3 { font-size: 1rem; margin: 0; }
+.capture-form, .seasoning-review { margin-top: .8rem; }
+.label-review { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: .8rem; margin-top: .8rem; }
+.label-review figure, .ocr-text { min-width: 0; margin: 0; padding: .7rem; border: 1px solid var(--line); border-radius: .7rem; background: #f8faf8; }
+.label-review img { display: block; width: 100%; max-height: 24rem; object-fit: contain; }
+.label-review figcaption, .muted { color: var(--muted); font-size: .82rem; }
+.ocr-text pre { max-height: 18rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: .65rem; border-radius: .5rem; background: #fff; font: inherit; font-size: .86rem; }
+.seasoning-review { padding-top: .9rem; border-top: 1px solid var(--line); }
+.success { padding: .75rem; color: #175b41; background: #eef8f1; border: 1px solid #bcd9c5; border-radius: .7rem; }
+.saved-seasonings { margin-top: 1rem; padding-top: .8rem; border-top: 1px solid var(--line); }
+.saved-seasonings ul { list-style: none; padding: 0; margin: .5rem 0; }
+.saved-seasonings li { display: grid; gap: .1rem; padding: .65rem 0; border-bottom: 1px solid #edf1ee; }
+.saved-seasonings small { color: var(--muted); }
 footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .8rem; }
 footer p { max-width: 48rem; margin: auto; padding: .75rem 1rem; }
-@media (max-width: 420px) { .field-grid { grid-template-columns: 1fr; gap: 0; } .nutrient-grid { column-gap: .55rem; } .nutrient-grid label { font-size: .82rem; } .nutrient-unit span { font-size: .72rem; } .inline-input { align-items: flex-start; flex-direction: column; } }
+@media (max-width: 520px) { .field-grid, .label-review { grid-template-columns: 1fr; gap: 0; } .nutrient-grid { column-gap: .55rem; } .nutrient-grid label { font-size: .82rem; } .nutrient-unit span { font-size: .72rem; } .inline-input { align-items: flex-start; flex-direction: column; } .seasoning-flow { padding: .8rem; } }
 @media (min-width: 700px) { main { padding-top: 2.2rem; } .ingredient-card { padding: 1.2rem; } }

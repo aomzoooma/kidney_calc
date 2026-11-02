@@ -52,16 +52,18 @@ export function App() {
     <header className="topbar"><a className="brand" href="#top">ครัวอุ่นใจ <span>เครื่องมือทดลองสำหรับผู้ดูแล</span></a></header>
     <main id="top">
       <section className="intro">
-        <p className="eyebrow">ทดลองคำนวณสูตรอาหาร</p>
-        <h1>ใส่วัตถุดิบ<br />แล้วดูสารอาหาร</h1>
-        <p>ทดลองกรอกตัวเลขสมมติ ระบบคำนวณตามปริมาณที่ใช้และสัดส่วนเสิร์ฟ</p>
+        <h1>ถ่ายฉลาก<br />ตรวจ แล้วบันทึก</h1>
+        <p>ภาพทดสอบเท่านั้น · ตรวจข้อมูลก่อนบันทึก และนำไปใช้ในสูตรยังไม่เปิด</p>
       </section>
       <aside className="notice" role="note">
         <span className="notice-mark" aria-hidden="true">!</span>
         <div><h2>ใช้ตัวเลขสมมติเท่านั้น</h2><p>ห้ามใช้ค่าจากฉลากอาหารจริงหรือข้อมูลผู้ป่วย ระบบไม่มีฐานข้อมูลอาหาร ไม่บันทึกสูตร และผลนี้ใช้ตัดสินใจด้านอาหารหรือการรักษาไม่ได้</p></div>
       </aside>
+      <OcrPreview />
+      <section aria-labelledby="recipe-title">
+      <div className="section-heading"><h2 id="recipe-title">คำนวณสูตรอาหาร</h2></div>
       <form onSubmit={calculate}>
-        <section className="section-heading"><div><p className="eyebrow">สูตรทดลอง</p><h2>รายการวัตถุดิบ</h2></div><button type="button" className="add-button" onClick={() => { revision.current++; setIngredients(items => [...items, newIngredient()]); setResult(null) }}>＋ เพิ่มวัตถุดิบ</button></section>
+        <section className="section-heading"><h2>รายการวัตถุดิบ</h2><button type="button" className="add-button" onClick={() => { revision.current++; setIngredients(items => [...items, newIngredient()]); setResult(null) }}>＋ เพิ่มวัตถุดิบ</button></section>
         {ingredients.map((item, index) => <fieldset className="ingredient-card" key={index}>
           <legend>วัตถุดิบ {index + 1}</legend>
           {ingredients.length > 1 && <button type="button" className="remove-button" aria-label={`ลบวัตถุดิบ ${index + 1}`} onClick={() => { revision.current++; setIngredients(items => items.filter((_, i) => i !== index)); setResult(null) }}>ลบ</button>}
@@ -80,13 +82,13 @@ export function App() {
         <button className="submit-button" type="submit" disabled={busy}>{busy ? 'กำลังคำนวณ…' : 'คำนวณสารอาหาร'}</button>
       </form>
       {error && <p className="error" role="alert">{error}</p>}
-      {result && <section className="results" aria-live="polite" aria-labelledby="results-title"><div className="result-title"><div><p className="eyebrow">ผลทดลอง · {result.portion} ส่วน</p><h2 id="results-title">สารอาหารโดยประมาณ</h2></div><span className="status-pill">ไม่ใช่คำแนะนำทางการแพทย์</span></div>
+      {result && <section className="results" aria-live="polite" aria-labelledby="results-title"><div className="result-title"><div><h2 id="results-title">สารอาหารโดยประมาณ · {result.portion} ส่วน</h2></div><span className="status-pill">ไม่ใช่คำแนะนำทางการแพทย์</span></div>
         <ul>{nutrients.map(([key, label, unit]) => { const total = result.totals[key]; return <li key={key}><span>{label}</span><strong>{total.value === null ? 'ไม่ทราบ' : `${total.value} ${unit}`}</strong><small>{total.complete ? 'ข้อมูลครบตามที่กรอก' : 'ข้อมูลไม่ครบ · มีรายการที่ไม่ทราบ'}</small></li> })}</ul>
         <p className="footnote">ค่าที่ทราบรวมตามสูตรและสัดส่วนเสิร์ฟ ค่าที่เว้นว่างยังคงเป็น “ไม่ทราบ” ไม่ได้ถือเป็นศูนย์</p>
       </section>}
-      <OcrPreview />
+      </section>
     </main>
-    <footer><p>ต้นแบบทดลอง · ไม่บันทึกข้อมูล · ไม่มีข้อมูลอาหารจริงหรือการตรวจสอบทางคลินิก</p></footer>
+    <footer><p>ข้อมูลทดสอบเท่านั้น · ยังไม่มีการตรวจสอบทางคลินิก · ห้ามใช้ตัดสินใจด้านการรักษา</p></footer>
   </div>
 }
 
