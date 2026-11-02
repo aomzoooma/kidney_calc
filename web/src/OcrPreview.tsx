@@ -308,14 +308,14 @@ export function OcrPreview() {
       <button className="submit-button" type="submit" disabled={saving || busy || !confirmed || !reviewed}>{saving ? 'กำลังบันทึก…' : busy ? 'รอ OCR เสร็จก่อนบันทึก…' : 'บันทึกเครื่องปรุงทดลอง'}</button>
     </form>}
     {error && <p className="error" role="alert">{error}</p>}
-    {saveMessage && <p className="success" role="status">{saveMessage} · การนำไปใช้ในสูตรยังรอ API ที่รองรับ version ID</p>}
+    {saveMessage && <p className="success" role="status">{saveMessage}</p>}
     <div className="saved-seasonings">
       <h3>เครื่องปรุงที่บันทึกไว้</h3>
       {listState === 'loading' && <p className="muted">กำลังตรวจรายการ…</p>}
       {listState === 'unavailable' && <p className="muted">ยังเชื่อมต่อรายการที่บันทึกไม่ได้ รายการทดลองนี้ยังไม่พร้อมใช้งาน</p>}
       {listState === 'ready' && saved.length === 0 && <p className="muted">ยังไม่มีรายการทดลองที่บันทึก</p>}
       {saved.length > 0 && <ul>{saved.map(item => <li key={item.version_id}><strong>{item.name}</strong>{item.brand && <span>{item.brand}</span>}<small>ข้อมูลต่อ {item.basis_quantity} {item.basis_unit === 'g' ? 'กรัม' : 'มล.'} · รุ่น {item.version_id}</small></li>)}</ul>}
-      <p className="muted">การเลือกเครื่องปรุงในสูตรยังไม่เปิด จนกว่าตัวคำนวณจะรองรับรุ่นข้อมูลที่บันทึก</p>
+      <p className="muted">เลือกเครื่องปรุงที่บันทึกไว้ในเครื่องคำนวณสูตรทดลองได้</p>
     </div>
   </section>
 }

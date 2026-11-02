@@ -112,7 +112,7 @@ it('saves only reviewed user-entered values and keeps unknown nutrients null', a
   const payload = JSON.parse(String(post?.[1]?.body))
   expect(payload).toMatchObject({ synthetic_only: true, name: 'ซอสตัวอย่าง', basis_quantity: '100', basis_unit: 'g', reviewed: true })
   expect(payload.nutrients).toMatchObject({ sodium_mg: '121', potassium_mg: null, phosphorus_mg: null })
-  expect(screen.getByText(/การเลือกเครื่องปรุงในสูตรยังไม่เปิด/)).toBeTruthy()
+  expect(screen.getByText(/เลือกเครื่องปรุงที่บันทึกไว้ในเครื่องคำนวณสูตรทดลองได้/)).toBeTruthy()
 })
 
 it('requires the synthetic-image attestation before allowing review or save', async () => {
