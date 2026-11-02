@@ -57,12 +57,25 @@ class IngredientStoreTest(unittest.TestCase):
         self.add(ingredient_id, "2", {})
         self.assertEqual(len(self.store.get_ingredient(ingredient_id)["versions"]), 2)
 
+    def test_ingredient_identity_cannot_change_after_source_is_recorded(self):
+        ingredient_id = self.store.create_ingredient("Synthetic lentil")
+        self.add(ingredient_id, "1", {})
+        with sqlite3.connect(self.database) as db:
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "identities are immutable"):
+                db.execute("UPDATE ingredients SET name = ? WHERE id = ?", ("Renamed item", ingredient_id))
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "identities are immutable"):
+                db.execute("DELETE FROM ingredients WHERE id = ?", (ingredient_id,))
+        record = self.store.get_ingredient(ingredient_id)
+        self.assertEqual(record["name"], "Synthetic lentil")
+        self.assertEqual(record["versions"][0]["version"], "1")
+
     def test_validates_data_and_parameterizes_identity(self):
         name = "synthetic'); DROP TABLE ingredients; --"
         ingredient_id = self.store.create_ingredient(name)
         self.assertEqual(self.store.get_ingredient(ingredient_id)["name"], name)
         invalid = [
             {"retrieved_on": "not-a-date"},
+            {"basis_quantity": None},
             {"basis_quantity": Decimal("0")},
             {"basis_quantity": Decimal("NaN")},
             {"basis_unit": "cup"},

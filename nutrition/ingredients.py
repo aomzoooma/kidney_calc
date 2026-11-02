@@ -30,6 +30,8 @@ def _day(value, field, *, optional=False):
 
 def _decimal(value, field, *, positive=False):
     if value is None:
+        if positive:
+            raise ValueError(f"{field} must be positive")
         return None
     if not isinstance(value, Decimal) or not value.is_finite():
         raise ValueError(f"{field} must be a finite Decimal")
@@ -69,6 +71,14 @@ class IngredientStore:
                     {nutrient_columns},
                     UNIQUE(ingredient_id, version)
                 );
+                CREATE TRIGGER IF NOT EXISTS ingredients_no_update
+                    BEFORE UPDATE ON ingredients BEGIN
+                    SELECT RAISE(ABORT, 'ingredient identities are immutable');
+                END;
+                CREATE TRIGGER IF NOT EXISTS ingredients_no_delete
+                    BEFORE DELETE ON ingredients BEGIN
+                    SELECT RAISE(ABORT, 'ingredient identities are immutable');
+                END;
                 CREATE TRIGGER IF NOT EXISTS ingredient_versions_no_update
                     BEFORE UPDATE ON ingredient_versions BEGIN
                     SELECT RAISE(ABORT, 'ingredient versions are immutable');
