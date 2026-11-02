@@ -81,7 +81,7 @@ it('saves reviewed synthetic source metadata, then finds and selects that versio
   const body = JSON.parse(String(recipeCall?.[1]?.body))
   expect(body.ingredients[1]).toMatchObject({ source_type: 'saved', ingredient_version_id: 24, amount: '50', food_state: 'cooked' })
   expect(body.ingredients[1]).not.toHaveProperty('sodium_mg')
-  await screen.findByText('สารอาหารโดยประมาณ · 1 ส่วน')
+  await screen.findByText('สารอาหารโดยประมาณ · 1 ของสูตร')
   expect(await screen.findAllByText(/วันที่แหล่งข้อมูล 2026-01-02/)).toHaveLength(2)
 })
 

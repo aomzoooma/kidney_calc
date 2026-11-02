@@ -45,7 +45,7 @@ describe('manual recipe UI', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /ยืนยันว่ากำลังทดสอบ/ }))
     fireEvent.click(screen.getByRole('button', { name: 'คำนวณสารอาหาร' }))
     expect(fetchMock.mock.calls.some(([url]) => url === '/experimental/recipes/calculate')).toBe(true)
-    await screen.findByText('สารอาหารโดยประมาณ · 1 ส่วน')
+    await screen.findByText('สารอาหารโดยประมาณ · 1 ของสูตร')
     const calculation = fetchMock.mock.calls.find(([url]) => url === '/experimental/recipes/calculate')
     const body = JSON.parse(String(calculation?.[1]?.body))
     expect(body.ingredients[0].seasoning_version_id).toBe(42)
@@ -80,7 +80,7 @@ describe('manual recipe UI', () => {
     fireEvent.change(screen.getAllByLabelText(/ปริมาณที่ใช้/)[0], { target: { value: '25' } })
     fireEvent.change(screen.getByLabelText('ชื่ออาหารหรือคำค้นภาษาไทยหรืออังกฤษ'), { target: { value: 'brown rice' } })
     fireEvent.click(screen.getByRole('button', { name: 'ค้นหา USDA' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'เพิ่มเป็นรายการใหม่' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'เลือกวัตถุดิบนี้' }))
     expect(screen.getAllByLabelText('ชื่อวัตถุดิบ')[0]).toHaveProperty('value', 'Manual rice')
     expect(screen.getAllByLabelText(/ปริมาณที่ใช้/)[0]).toHaveProperty('value', '25')
     expect(screen.getByText(/USDA FoodData Central.*ID 77.*สภาพ: สุก/)).toBeTruthy()
@@ -92,13 +92,46 @@ describe('manual recipe UI', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /ยืนยันว่ากำลังทดสอบ/ }))
     fireEvent.click(screen.getByRole('button', { name: 'คำนวณสารอาหาร' }))
     expect(fetchMock.mock.calls.some(([url]) => url === '/experimental/recipes/calculate')).toBe(true)
-    await screen.findByText('สารอาหารโดยประมาณ · 1 ส่วน')
+    await screen.findByText('สารอาหารโดยประมาณ · 1 ของสูตร')
     const calculation = fetchMock.mock.calls.find(([url]) => url === '/experimental/recipes/calculate')
     const body = JSON.parse(String(calculation?.[1]?.body))
     expect(body.ingredients[0]).toMatchObject({ source_type: 'manual', amount: '25' })
     expect(body.ingredients[1]).toMatchObject({ source_type: 'usda', fdc_id: 77, amount: '100', unit: 'g' })
     expect(body.ingredients[1]).not.toHaveProperty('energy_kcal')
     expect(body.ingredients[1]).not.toHaveProperty('protein_g')
+  })
+
+  it('blocks USDA records with unknown food state and explains how to recover', async () => {
+    const fetchMock = vi.fn(async (url: string) => url.startsWith('/experimental/usda/search')
+      ? { ok: true, json: async () => ({ items: [
+        { fdc_id: 88, description: 'Soup, HEALTHY CHOICE Chicken and Rice Soup, canned', source_type: 'Foundation', source_version: 'test-v1', food_state: null },
+        { fdc_id: 89, description: 'Soup, chicken, canned', source_type: 'Branded', source_version: 'test-v1', food_state: 'as_sold' },
+      ] }) }
+      : { ok: true, json: async () => ({ items: [] }) })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getByLabelText('ชื่ออาหารหรือคำค้นภาษาไทยหรืออังกฤษ'), { target: { value: 'chicken and rice soup' } })
+    fireEvent.click(screen.getByRole('button', { name: 'ค้นหา USDA' }))
+    const select = await screen.findByRole('button', { name: 'เลือกไม่ได้ · ไม่ระบุสภาพ' })
+    expect((select as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText(/รายการนี้ USDA ไม่ระบุสภาพอาหารที่ระบบต้องใช้คำนวณ/)).toBeTruthy()
+    expect((await screen.findByRole('button', { name: 'เลือกไม่ได้ · หมวดนี้ยังไม่รองรับ' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByText(/วัตถุดิบ 2/)).toBeNull()
+  })
+
+  it('shows a plain Thai recovery message for USDA state errors', async () => {
+    const fetchMock = vi.fn(async (url: string) => url === '/experimental/seasonings'
+      ? { ok: true, json: async () => ({ items: [] }) }
+      : { ok: false, json: async () => ({ detail: 'USDA record does not identify raw or cooked state' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getAllByLabelText(/ปริมาณที่ใช้/)[0], { target: { value: '100' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /ยืนยันว่ากำลังทดสอบ/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'คำนวณสารอาหาร' }))
+    expect((await screen.findByRole('alert')).textContent).toContain('รายการ USDA นี้ไม่ระบุว่าอาหารดิบหรือสุก')
+    expect(screen.queryByText(/USDA record does not identify/)).toBeNull()
   })
 
   it('suggests Thai USDA search terms, preserves USDA records and lets user select cooked food by exact ID', async () => {
@@ -126,7 +159,7 @@ describe('manual recipe UI', () => {
     expect(cookedRecord.querySelector('small')?.textContent).toContain('USDA FDC')
 
     const cookedResult = cookedName.closest('li')!
-    fireEvent.click(within(cookedResult).getByRole('button', { name: 'เพิ่มเป็นรายการใหม่' }))
+    fireEvent.click(within(cookedResult).getByRole('button', { name: 'เลือกวัตถุดิบนี้' }))
     fireEvent.change(document.querySelector<HTMLInputElement>('[data-ingredient-index="1"] input[type="number"]')!, { target: { value: '500' } })
     expect(document.querySelector('[data-ingredient-index="1"] summary')?.textContent).toContain('Chicken breast, cooked')
     expect(document.querySelector('[data-ingredient-index="1"] summary')?.textContent).toContain('500 กรัม')
@@ -369,7 +402,7 @@ describe('manual recipe UI', () => {
     expect(new URL(String(searchCall?.[0]), window.location.origin).searchParams.get('q')).toBe('constructor')
   })
 
-  it('shows unknown preparation state and leaves server to block calculation', async () => {
+  it('blocks USDA records with unknown preparation state before calculation', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => url.startsWith('/experimental/usda/search')
       ? { ok: true, json: async () => ({ items: [{ fdc_id: 78, description: 'Rice', source_type: 'Foundation', source_version: null, food_state: null }] }) }
       : { ok: true, json: async () => ({ items: [] }) }))
@@ -377,9 +410,9 @@ describe('manual recipe UI', () => {
     openRecipes()
     fireEvent.change(screen.getByLabelText('ชื่ออาหารหรือคำค้นภาษาไทยหรืออังกฤษ'), { target: { value: 'rice' } })
     fireEvent.click(screen.getByRole('button', { name: 'ค้นหา USDA' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'เพิ่มเป็นรายการใหม่' }))
-    expect(screen.getAllByText(/ไม่ระบุสภาพ · ยังใช้คำนวณไม่ได้/).length).toBeGreaterThan(0)
-    expect((screen.getAllByLabelText(/หน่วยปริมาณ/)[1] as HTMLSelectElement).disabled).toBe(true)
+    expect((await screen.findByRole('button', { name: 'เลือกไม่ได้ · ไม่ระบุสภาพ' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText(/รายการนี้ USDA ไม่ระบุสภาพอาหารที่ระบบต้องใช้คำนวณ/)).toBeTruthy()
+    expect(screen.queryByLabelText('แหล่งข้อมูลวัตถุดิบ 2')).toBeNull()
   })
 
   it('keeps selected USDA name tied to ID and lets source switch clear it to manual', async () => {
@@ -392,7 +425,7 @@ describe('manual recipe UI', () => {
     openRecipes()
     fireEvent.change(screen.getByLabelText('ชื่ออาหารหรือคำค้นภาษาไทยหรืออังกฤษ'), { target: { value: 'rice' } })
     fireEvent.click(screen.getByRole('button', { name: 'ค้นหา USDA' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'เพิ่มเป็นรายการใหม่' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'เลือกวัตถุดิบนี้' }))
     expect(screen.getAllByLabelText('ชื่อวัตถุดิบ')).toHaveLength(1)
     const source = screen.getByLabelText('แหล่งข้อมูลวัตถุดิบ 2')
     expect((source as HTMLSelectElement).value).toBe('usda')
@@ -472,7 +505,7 @@ describe('manual recipe UI', () => {
       fireEvent.click(screen.getByRole('button', { name: /เพิ่มวัตถุดิบ/ }))
       fireEvent.click(screen.getByRole('button', { name: 'ลบวัตถุดิบ 2' }))
     }],
-    ['changing the portion', () => fireEvent.change(screen.getByLabelText('สัดส่วนที่เสิร์ฟ'), { target: { value: '0.5' } })],
+    ['changing the portion', () => fireEvent.change(screen.getByLabelText('สัดส่วนของสูตรที่รับประทาน'), { target: { value: '0.5' } })],
   ])('hides delayed totals after %s', async (_change, change) => {
     let resolveFetch!: (value: { ok: boolean; json: () => Promise<typeof response> }) => void
     const delayedResponse = new Promise<{ ok: boolean; json: () => Promise<typeof response> }>(resolve => { resolveFetch = resolve })
@@ -521,7 +554,7 @@ describe('manual recipe UI', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /ยืนยันว่ากำลังทดสอบ/ }))
     fireEvent.click(screen.getByRole('button', { name: 'คำนวณสารอาหาร' }))
     expect(fetchMock.mock.calls.some(([url]) => url === '/experimental/recipes/calculate')).toBe(true)
-    await screen.findByText('สารอาหารโดยประมาณ · 1 ส่วน')
+    await screen.findByText('สารอาหารโดยประมาณ · 1 ของสูตร')
     const calculation = fetchMock.mock.calls.find(([url]) => url === '/experimental/recipes/calculate')
     const body = JSON.parse(String(calculation?.[1]?.body))
     expect(body.ingredients[1]).toMatchObject({ source_type: 'saved', ingredient_version_id: 24, amount: '50', unit: 'g', food_state: 'cooked' })
