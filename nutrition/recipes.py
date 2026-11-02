@@ -116,21 +116,44 @@ class RecipeStore:
             return recipe_id
 
     def rename_recipe(self, recipe_id: int, name: str):
+        self.update_recipe(recipe_id, name=name)
+
+    def set_favorite(self, recipe_id: int, favorite: bool):
+        self.update_recipe(recipe_id, favorite=favorite)
+
+    def update_recipe(self, recipe_id: int, *, name: str | None = None,
+                      favorite: bool | None = None):
         recipe_id = _recipe_id(recipe_id)
-        name = _text(name, "name")
+        if name is not None:
+            name = _text(name, "name")
+        if favorite is not None and type(favorite) is not bool:
+            raise ValueError("favorite must be a boolean")
+        if name is None and favorite is None:
+            raise ValueError("provide a recipe name or favorite value")
+        updates = []
+        values = []
+        if name is not None:
+            updates.append("name = ?")
+            values.append(name)
+        if favorite is not None:
+            updates.append("favorite = ?")
+            values.append(int(favorite))
         with self._connect() as db:
-            cursor = db.execute("UPDATE recipes SET name = ? WHERE id = ?", (name, recipe_id))
+            cursor = db.execute(f"UPDATE recipes SET {', '.join(updates)} WHERE id = ?",
+                                (*values, recipe_id))
             if cursor.rowcount == 0:
                 raise LookupError("recipe not found")
 
-    def set_favorite(self, recipe_id: int, favorite: bool):
-        recipe_id = _recipe_id(recipe_id)
-        if type(favorite) is not bool:
-            raise ValueError("favorite must be a boolean")
+    def list_recipes(self) -> list[dict]:
         with self._connect() as db:
-            cursor = db.execute(
-                "UPDATE recipes SET favorite = ? WHERE id = ?", (int(favorite), recipe_id)
-            )
+            rows = db.execute("SELECT id, name, favorite FROM recipes ORDER BY id").fetchall()
+            return [{"id": row["id"], "name": row["name"],
+                     "favorite": bool(row["favorite"])} for row in rows]
+
+    def delete_recipe(self, recipe_id: int):
+        recipe_id = _recipe_id(recipe_id)
+        with self._connect() as db:
+            cursor = db.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
             if cursor.rowcount == 0:
                 raise LookupError("recipe not found")
 

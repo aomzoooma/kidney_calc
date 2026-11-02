@@ -18,10 +18,11 @@ from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictInt, ValidationError
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictBool, StrictInt, ValidationError
 
 from nutrition.calculator import NUTRIENTS, Measure, NutrientSource, calculate
 from nutrition.label_parser import parse_nutrition_label
+from nutrition.recipes import RecipeStore
 from nutrition.seasonings import SeasoningStore
 from nutrition.profiles import ProfileStore
 from api.ocr import MAX_IMAGE_BYTES, OCRServiceError, ocr_image
@@ -75,6 +76,45 @@ class RecipeInput(BaseModel):
     synthetic_only: Literal[True]
     portion: Portion
     ingredients: list[IngredientInput] = Field(min_length=1, max_length=100)
+
+
+class SavedRecipeIngredientInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ingredient_version_id: Annotated[StrictInt, Field(gt=0)]
+    amount: Positive
+    unit: Literal["g", "ml"]
+    food_state: Literal["raw", "cooked", "as_sold"]
+
+
+class SavedRecipeInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    synthetic_only: Literal[True]
+    name: str = Field(min_length=1, max_length=150)
+    ingredients: list[SavedRecipeIngredientInput] = Field(min_length=1, max_length=100)
+
+
+class SavedRecipeIngredientsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    synthetic_only: Literal[True]
+    ingredients: list[SavedRecipeIngredientInput] = Field(min_length=1, max_length=100)
+
+
+class SavedRecipeUpdateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    synthetic_only: Literal[True]
+    name: Optional[str] = Field(default=None, min_length=1, max_length=150)
+    favorite: Optional[StrictBool] = None
+
+
+class SavedRecipeCalculationInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    synthetic_only: Literal[True]
+    portion: Portion
 
 
 class OCRInput(BaseModel):
@@ -189,6 +229,32 @@ def _demo_store():
             return _demo_stores[resolved][1]
         except (OSError, sqlite3.Error, ValueError) as exc:
             raise HTTPException(status_code=503, detail='Experimental storage is invalid or unavailable') from exc
+
+
+def _recipe_store():
+    return RecipeStore(_demo_store().ingredients.database)
+
+
+def _recipe_response(recipe):
+    result = {"experimental": True, "clinical_use": False, **recipe, "ingredients": []}
+    for source in recipe["ingredients"]:
+        item = dict(source)
+        for key in ("amount", "basis_quantity", *NUTRIENTS):
+            if item[key] is not None:
+                item[key] = str(item[key])
+        item["reviewed"] = bool(item["reviewed"])
+        result["ingredients"].append(item)
+    return result
+
+
+def _recipe_entries(items):
+    ingredients = _demo_store().ingredients
+    entries = []
+    for item in items:
+        if ingredients.get_reviewed_version(item.ingredient_version_id) is None:
+            raise ValueError("Recipe ingredients must use locally reviewed source versions")
+        entries.append((item.ingredient_version_id, item.amount, item.unit, item.food_state))
+    return entries
 
 
 def _suggestions(text):
@@ -538,3 +604,111 @@ def calculate_recipe(payload: RecipeInput):
         },
         "unreviewed_sources": unreviewed,
     }
+
+
+@app.post("/experimental/recipes")
+def create_saved_recipe(payload: SavedRecipeInput):
+    try:
+        store = _recipe_store()
+        name = payload.name.strip()
+        recipe_id = store.create_recipe(name, _recipe_entries(payload.ingredients))
+        return {"id": recipe_id, "name": name, "saved": True,
+                "experimental": True, "clinical_use": False}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail='Recipe storage is unavailable') from exc
+
+
+@app.get("/experimental/recipes")
+def list_saved_recipes():
+    try:
+        return {"items": _recipe_store().list_recipes(), "experimental": True, "clinical_use": False}
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail='Recipe storage is unavailable') from exc
+
+
+@app.get("/experimental/recipes/{recipe_id}")
+def get_saved_recipe(recipe_id: int):
+    try:
+        recipe = _recipe_store().get_recipe(recipe_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail='Recipe storage is unavailable') from exc
+    if recipe is None:
+        raise HTTPException(status_code=404, detail='Recipe not found')
+    return _recipe_response(recipe)
+
+
+@app.patch("/experimental/recipes/{recipe_id}")
+def update_saved_recipe(recipe_id: int, payload: SavedRecipeUpdateInput):
+    if payload.name is None and payload.favorite is None:
+        raise HTTPException(status_code=422, detail='Provide a recipe name or favorite value')
+    try:
+        store = _recipe_store()
+        name = payload.name.strip() if payload.name is not None else None
+        store.update_recipe(recipe_id, name=name, favorite=payload.favorite)
+        return {"id": recipe_id, "updated": True,
+                "updated_fields": {key: value for key, value in (
+                    ("name", name), ("favorite", payload.favorite),
+                ) if value is not None},
+                "experimental": True, "clinical_use": False}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail='Recipe not found') from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail='Recipe storage is unavailable') from exc
+
+
+@app.put("/experimental/recipes/{recipe_id}/ingredients")
+def replace_saved_recipe_ingredients(recipe_id: int, payload: SavedRecipeIngredientsInput):
+    try:
+        store = _recipe_store()
+        store.replace_ingredients(recipe_id, _recipe_entries(payload.ingredients))
+        return {"id": recipe_id, "ingredients_updated": True,
+                "experimental": True, "clinical_use": False}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail='Recipe not found') from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail='Recipe storage is unavailable') from exc
+
+
+@app.post("/experimental/recipes/{recipe_id}/calculate")
+def calculate_saved_recipe(recipe_id: int, payload: SavedRecipeCalculationInput):
+    try:
+        result = _recipe_store().calculate_recipe(recipe_id, payload.portion)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail='Recipe not found') from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except DecimalException as exc:
+        raise HTTPException(status_code=422, detail='Inputs exceed supported calculation range') from exc
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail='Recipe storage is unavailable') from exc
+    return {
+        "experimental": True, "clinical_use": False,
+        "portion": str(result["portion"]),
+        "totals": {
+            name: {"value": str(value) if value is not None else None, "complete": complete}
+            for name, (value, complete) in result["totals"].items()
+        },
+        "unreviewed_sources": result["unreviewed_sources"],
+    }
+
+
+@app.delete("/experimental/recipes/{recipe_id}", status_code=204)
+def delete_saved_recipe(recipe_id: int, synthetic_only: Literal["true"] = Query(...)):
+    try:
+        _recipe_store().delete_recipe(recipe_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail='Recipe not found') from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status_code=409, detail='Recipe is referenced by saved meal history') from exc
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail='Recipe storage is unavailable') from exc
