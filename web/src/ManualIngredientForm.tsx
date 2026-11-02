@@ -18,6 +18,7 @@ export function ManualIngredientForm() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [savedVersion, setSavedVersion] = useState<number | null>(null)
+  const [reviewed, setReviewed] = useState(false)
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -35,6 +36,7 @@ export function ManualIngredientForm() {
       const payload = await response.json()
       if (!response.ok) throw new Error('บันทึกไม่ได้ ตรวจข้อมูลแล้วลองอีกครั้ง')
       setSavedVersion(payload.version_id as number)
+      setReviewed(false)
     } catch {
       setError('บันทึกวัตถุดิบในเครื่องนี้ไม่ได้ ตรวจว่า API ทำงานอยู่และใช้ข้อมูลสมมติเท่านั้น')
     } finally { setBusy(false) }
@@ -43,7 +45,10 @@ export function ManualIngredientForm() {
   return <section className="seasoning-flow manual-ingredient" aria-labelledby="manual-ingredient-title">
     <div className="page-intro"><h2 id="manual-ingredient-title">บันทึกวัตถุดิบจากข้อมูลสมมติ</h2>
       <p>บันทึกในเครื่องนี้เท่านั้น · ห้ามใช้ฉลากจริง ข้อมูลผู้ป่วย หรือค่าที่คาดเดา · ค่าที่เว้นว่างจะยังเป็น “ไม่ทราบ”</p></div>
-    <form onSubmit={save} onChange={() => setSavedVersion(null)}>
+    <form onSubmit={save} onChange={event => {
+      setSavedVersion(null)
+      if ((event.target as HTMLInputElement).type !== 'checkbox') setReviewed(false)
+    }}>
       <fieldset className="manual-ingredient-fields" disabled={busy}>
       <label>ชื่อวัตถุดิบ <input required maxLength={150} value={name} onChange={event => setName(event.target.value)} autoComplete="off" /></label>
       <div className="field-grid">
@@ -67,7 +72,7 @@ export function ManualIngredientForm() {
           <input inputMode="decimal" type="number" min="0" step="any" value={values[key]} onChange={event => setValues(current => ({ ...current, [key]: event.target.value }))} placeholder="ไม่ทราบ" />
           <span>{unit}</span></span></label>)}
       </div>
-      <label className="attestation"><input required type="checkbox" /> ยืนยันว่าเป็นข้อมูลสมมติ และตรวจทานกับแหล่งที่ระบุแล้ว</label>
+      <label className="attestation"><input required type="checkbox" checked={reviewed} onChange={event => setReviewed(event.target.checked)} /> ยืนยันว่าเป็นข้อมูลสมมติ และตรวจทานกับแหล่งที่ระบุแล้ว</label>
       <button className="submit-button" type="submit" disabled={busy}>{busy ? 'กำลังบันทึก…' : 'บันทึกตัวอย่างวัตถุดิบ'}</button>
       </fieldset>
     </form>

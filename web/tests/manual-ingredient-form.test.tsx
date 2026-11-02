@@ -89,8 +89,13 @@ it('blocks edits while save is pending and clears saved status after a later edi
   type SaveResponse = { ok: boolean; json: () => Promise<{ ingredient_id: number; version_id: number }> }
   let resolveSave!: (response: SaveResponse) => void
   const pendingSave = new Promise<SaveResponse>(resolve => { resolveSave = resolve })
-  const fetchMock = vi.fn(async (url: string) => url === '/experimental/ingredients'
-    ? pendingSave : { ok: true, json: async () => ({ items: [] }) })
+  let saveCount = 0
+  const fetchMock = vi.fn(async (url: string) => {
+    if (url !== '/experimental/ingredients') return { ok: true, json: async () => ({ items: [] }) }
+    saveCount++
+    return saveCount === 1 ? pendingSave
+      : { ok: true, json: async () => ({ ingredient_id: 1, version_id: 2 }) }
+  })
   vi.stubGlobal('fetch', fetchMock)
   render(<App />)
 
@@ -105,7 +110,9 @@ it('blocks edits while save is pending and clears saved status after a later edi
   fireEvent.change(saveForm.getByLabelText('ข้อมูลสารอาหารต่อปริมาณ'), { target: { value: '100' } })
   fireEvent.change(saveForm.getByLabelText('หน่วยฐาน'), { target: { value: 'g' } })
   fireEvent.change(saveForm.getByLabelText('สภาพอาหาร'), { target: { value: 'raw' } })
-  fireEvent.click(saveForm.getByRole('checkbox'))
+  const review = saveForm.getByRole('checkbox') as HTMLInputElement
+  fireEvent.click(review)
+  expect(review.checked).toBe(true)
   const submit = saveForm.getByRole('button', { name: 'บันทึกตัวอย่างวัตถุดิบ' })
   const form = submit.closest('form') as HTMLFormElement
   const fieldset = form.querySelector('fieldset') as HTMLFieldSetElement
@@ -126,7 +133,20 @@ it('blocks edits while save is pending and clears saved status after a later edi
   expect((await screen.findByRole('status')).textContent).toContain('บันทึกแล้ว · รุ่น 1')
   expect(fieldset.disabled).toBe(false)
   expect(name.matches(':disabled')).toBe(false)
+  expect(review.checked).toBe(false)
   fireEvent.change(name, { target: { value: 'ข้าวที่แก้แล้ว' } })
   expect(name.value).toBe('ข้าวที่แก้แล้ว')
   expect(screen.queryByRole('status')).toBeNull()
+  expect(review.checked).toBe(false)
+
+  fireEvent.click(submit)
+  expect(fetchMock.mock.calls.filter(([url]) => url === '/experimental/ingredients')).toHaveLength(1)
+  fireEvent.click(review)
+  expect(review.checked).toBe(true)
+  fireEvent.click(submit)
+  expect(fetchMock.mock.calls.filter(([url]) => url === '/experimental/ingredients')).toHaveLength(2)
+  expect(JSON.parse(String(fetchMock.mock.calls.filter(([url]) => url === '/experimental/ingredients')[1][1]?.body)))
+    .toMatchObject({ name: 'ข้าวที่แก้แล้ว', reviewed: true })
+  expect((await screen.findByRole('status')).textContent).toContain('บันทึกแล้ว · รุ่น 2')
+  expect(review.checked).toBe(false)
 })
