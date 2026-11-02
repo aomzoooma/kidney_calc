@@ -3,6 +3,7 @@
 import unittest
 import os
 import json
+import sqlite3
 import tempfile
 from decimal import Decimal
 from pathlib import Path
@@ -278,6 +279,83 @@ class LocalThaiIngredientSearchTest(unittest.TestCase):
         body['ingredients'][0]['ingredient_version_id'] = self.reviewed_version
         body['ingredients'][0]['source_type'] = 'manual'
         self.assertEqual(self.client.post('/experimental/recipes/calculate', json=body).status_code, 422)
+
+
+class ExperimentalProfileApiTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.db_path = Path(self.temp.name) / 'synthetic-profiles.sqlite'
+        self.env = patch.dict(os.environ, {'KIDNEY_EXPERIMENTAL_DB': str(self.db_path)})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self.client = TestClient(app, client=('127.0.0.1', 12345), base_url='http://127.0.0.1')
+
+    def test_synthetic_profile_goals_and_weights_survive_reload_in_experimental_db(self):
+        created = self.client.post('/experimental/profiles', json={
+            'synthetic_only': True, 'name': 'ตัวอย่าง ก',
+        })
+        self.assertEqual(created.status_code, 200, created.text)
+        profile_id = created.json()['id']
+        empty = self.client.get(f'/experimental/profiles/{profile_id}').json()
+        self.assertEqual(empty['goals'], [])
+        self.assertEqual(empty['dry_weights'], [])
+        self.assertFalse(empty['clinical_use'])
+
+        goal = self.client.post(f'/experimental/profiles/{profile_id}/goals', json={
+            'synthetic_only': True, 'clinician_set': True, 'nutrient': 'โซเดียม',
+            'amount': '1800', 'unit': 'มก./วัน', 'effective_on': '2026-11-01',
+        })
+        self.assertEqual(goal.status_code, 200, goal.text)
+        self.assertEqual(goal.json(), {
+            'goal_id': 1, 'profile_id': profile_id, 'saved': True,
+            'synthetic_only': True, 'clinical_use': False,
+        })
+        weight = self.client.post(f'/experimental/profiles/{profile_id}/dry-weights', json={
+            'synthetic_only': True, 'measured_on': '2026-11-02', 'kilograms': '62.5',
+        })
+        self.assertEqual(weight.status_code, 200, weight.text)
+        self.assertEqual(weight.json(), {
+            'weight_id': 1, 'profile_id': profile_id, 'saved': True,
+            'synthetic_only': True, 'clinical_use': False,
+        })
+
+        reloaded = self.client.get(f'/experimental/profiles/{profile_id}').json()
+        self.assertEqual(reloaded['goals'][0]['amount'], 1800)
+        self.assertEqual(reloaded['goals'][0]['confirmed_by'], 'Synthetic clinician-set goal')
+        self.assertEqual(reloaded['dry_weights'][0], {'measured_on': '2026-11-02', 'kilograms': 62.5})
+        self.assertEqual(self.client.get('/experimental/profiles').json()['items'], [
+            {'id': profile_id, 'name': 'ตัวอย่าง ก'},
+        ])
+
+        with sqlite3.connect(self.db_path) as db:
+            tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertTrue({'experimental_demo_marker', 'ingredients', 'patient_profiles', 'clinician_goals', 'dry_weights'} <= tables)
+
+    def test_profile_endpoints_reject_missing_synthetic_confirmation_and_extra_identity_fields(self):
+        for payload in (
+            {'name': 'synthetic'},
+            {'synthetic_only': True, 'name': 'synthetic', 'patient_identifier': '123'},
+        ):
+            self.assertEqual(self.client.post('/experimental/profiles', json=payload).status_code, 422)
+        created = self.client.post('/experimental/profiles', json={'synthetic_only': True, 'name': 'synthetic'})
+        profile_id = created.json()['id']
+        goal = {'synthetic_only': True, 'nutrient': 'sodium', 'amount': '0', 'unit': 'mg/day',
+                'effective_on': '2026-11-01'}
+        self.assertEqual(self.client.post(f'/experimental/profiles/{profile_id}/goals', json=goal).status_code, 422)
+        self.assertEqual(self.client.post('/experimental/profiles/0/goals', json={**goal, 'clinician_set': True}).status_code, 422)
+        self.assertEqual(self.client.get('/experimental/profiles/98765').status_code, 404)
+
+    def test_profile_routes_leave_unmarked_database_untouched(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute('CREATE TABLE unrelated_records (value TEXT)')
+            db.execute("INSERT INTO unrelated_records VALUES ('keep')")
+        response = self.client.get('/experimental/profiles')
+        self.assertEqual(response.status_code, 503)
+        with sqlite3.connect(self.db_path) as db:
+            tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertEqual(db.execute('SELECT value FROM unrelated_records').fetchone(), ('keep',))
+        self.assertEqual(tables, {'unrelated_records'})
 
 
 if __name__ == '__main__':

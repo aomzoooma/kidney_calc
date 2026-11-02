@@ -29,6 +29,7 @@ class ProfileStoreTest(unittest.TestCase):
         self.assertEqual(reopened["goals"][1]["amount"], 0)
         self.assertEqual(reopened["goals"][0]["confirmed_by"], "Synthetic clinician")
         self.assertIsNone(self.store.get_profile(98765))
+        self.assertEqual(self.store.list_profiles(), [{"id": profile_id, "name": "Synthetic profile"}])
 
     def test_rejects_ephemeral_in_memory_database(self):
         for database in (":memory:", "file::memory:?cache=shared", "file:profile?mode=memory&cache=shared"):
