@@ -33,7 +33,7 @@ Use artificial product names and dummy values solely to check transcription. The
 
 ## 3. Run the official OCR prompt locally
 
-The model card recommends the `typhoon-ocr` helper with a local Ollama base URL. Install it only in the repository virtual environment for this smoke test; it is not an application dependency and must not be added to `requirements.txt` without separate review.
+The Ollama model listing recommends the `typhoon-ocr` helper with a local Ollama base URL. Install it only in a separate local virtual environment for this smoke test; it is not an application dependency and must not be added to `requirements.txt` without separate review.
 
 ```powershell
 $OcrVenv = Join-Path $env:LOCALAPPDATA 'kidney-calc-ocr-venv'

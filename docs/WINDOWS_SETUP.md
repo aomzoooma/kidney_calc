@@ -8,6 +8,7 @@ Open PowerShell and choose a work folder. The repository is public; do not put d
 
 ```powershell
 $Repo = 'C:\work\kidney_calc'
+New-Item -ItemType Directory -Force (Split-Path $Repo) | Out-Null
 git clone --branch develop --single-branch https://github.com/aomzoooma/kidney_calc.git $Repo
 Set-Location $Repo
 git branch --show-current
