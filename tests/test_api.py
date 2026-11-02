@@ -307,10 +307,18 @@ class ExperimentalProfileApiTest(unittest.TestCase):
             'amount': '1800', 'unit': 'มก./วัน', 'effective_on': '2026-11-01',
         })
         self.assertEqual(goal.status_code, 200, goal.text)
+        self.assertEqual(goal.json(), {
+            'goal_id': 1, 'profile_id': profile_id, 'saved': True,
+            'synthetic_only': True, 'clinical_use': False,
+        })
         weight = self.client.post(f'/experimental/profiles/{profile_id}/dry-weights', json={
             'synthetic_only': True, 'measured_on': '2026-11-02', 'kilograms': '62.5',
         })
         self.assertEqual(weight.status_code, 200, weight.text)
+        self.assertEqual(weight.json(), {
+            'weight_id': 1, 'profile_id': profile_id, 'saved': True,
+            'synthetic_only': True, 'clinical_use': False,
+        })
 
         reloaded = self.client.get(f'/experimental/profiles/{profile_id}').json()
         self.assertEqual(reloaded['goals'][0]['amount'], 1800)

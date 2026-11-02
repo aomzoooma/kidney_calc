@@ -267,9 +267,10 @@ def add_profile_goal(profile_id: Annotated[int, Field(gt=0)], payload: Synthetic
     if store.get_profile(profile_id) is None:
         raise HTTPException(status_code=404, detail='Profile not found')
     try:
-        store.add_goal(profile_id, payload.nutrient, float(payload.amount), payload.unit,
-                       payload.effective_on.isoformat(), 'Synthetic clinician-set goal')
-        return {**store.get_profile(profile_id), 'synthetic_only': True, 'clinical_use': False}
+        goal_id = store.add_goal(profile_id, payload.nutrient, float(payload.amount), payload.unit,
+                                 payload.effective_on.isoformat(), 'Synthetic clinician-set goal')
+        return {'goal_id': goal_id, 'profile_id': profile_id, 'saved': True,
+                'synthetic_only': True, 'clinical_use': False}
     except ValueError as exc:
         raise HTTPException(status_code=422, detail='Check the goal fields and try again') from exc
     except sqlite3.Error as exc:
@@ -282,8 +283,9 @@ def add_profile_weight(profile_id: Annotated[int, Field(gt=0)], payload: Synthet
     if store.get_profile(profile_id) is None:
         raise HTTPException(status_code=404, detail='Profile not found')
     try:
-        store.add_dry_weight(profile_id, payload.measured_on.isoformat(), float(payload.kilograms))
-        return {**store.get_profile(profile_id), 'synthetic_only': True, 'clinical_use': False}
+        weight_id = store.add_dry_weight(profile_id, payload.measured_on.isoformat(), float(payload.kilograms))
+        return {'weight_id': weight_id, 'profile_id': profile_id, 'saved': True,
+                'synthetic_only': True, 'clinical_use': False}
     except ValueError as exc:
         raise HTTPException(status_code=422, detail='Check the weight fields and try again') from exc
     except sqlite3.Error as exc:

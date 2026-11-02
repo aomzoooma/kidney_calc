@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 
 type Profile = {
   id: number
@@ -29,22 +29,35 @@ export function ProfileManager() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
+  const selectedProfileId = useRef<number | null>(null)
+  const profileRequestRevision = useRef(0)
 
   async function loadProfiles(selectId?: number) {
+    const revision = ++profileRequestRevision.current
     setLoading(true)
     try {
       const result = await request<{ items: ProfileSummary[] }>('/experimental/profiles')
+      if (revision !== profileRequestRevision.current) return
       setProfiles(result.items)
-      const nextId = selectId ?? profile?.id ?? result.items[0]?.id
-      if (nextId) setProfile(await request<Profile>(`/experimental/profiles/${nextId}`))
-      else setProfile(null)
-    } finally { setLoading(false) }
+      const nextId = selectId ?? selectedProfileId.current ?? profile?.id ?? result.items[0]?.id
+      selectedProfileId.current = nextId ?? null
+      if (nextId) {
+        const next = await request<Profile>(`/experimental/profiles/${nextId}`)
+        if (revision === profileRequestRevision.current && selectedProfileId.current === nextId) setProfile(next)
+      } else setProfile(null)
+    } finally { if (revision === profileRequestRevision.current) setLoading(false) }
   }
 
   async function loadProfile(id: number) {
+    const revision = ++profileRequestRevision.current
+    selectedProfileId.current = id
     setLoading(true)
-    try { setProfile(await request<Profile>(`/experimental/profiles/${id}`)) }
-    finally { setLoading(false) }
+    try {
+      const next = await request<Profile>(`/experimental/profiles/${id}`)
+      if (revision === profileRequestRevision.current && selectedProfileId.current === id) setProfile(next)
+    } catch (cause) {
+      if (revision === profileRequestRevision.current && selectedProfileId.current === id) throw cause
+    } finally { if (revision === profileRequestRevision.current) setLoading(false) }
   }
 
   useEffect(() => {
@@ -69,7 +82,11 @@ export function ProfileManager() {
       <h2 id="profile-create-title">สร้างโปรไฟล์สมมติ</h2>
       <form onSubmit={event => void submit(event, async () => {
         const created = await request<ProfileSummary>('/experimental/profiles', json({ synthetic_only: true, name }))
-        setName(''); await loadProfiles(created.id)
+        profileRequestRevision.current++
+        selectedProfileId.current = created.id
+        setProfiles(current => [created, ...current.filter(item => item.id !== created.id)])
+        setProfile({ ...created, dry_weights: [], goals: [] })
+        setLoading(false); setName('')
       }, 'สร้างโปรไฟล์แล้ว')}>
         <label>ชื่อเรียกข้อมูลสมมติ <input required maxLength={80} value={name} onChange={event => setName(event.target.value)} autoComplete="off" /></label>
         <button className="submit-button" disabled={busy}>{busy ? 'กำลังบันทึก…' : 'สร้างโปรไฟล์สมมติ'}</button>
@@ -78,13 +95,17 @@ export function ProfileManager() {
 
     <section className="profile-section" aria-labelledby="profile-list-title">
       <h2 id="profile-list-title">โปรไฟล์ที่บันทึกในเครื่องนี้</h2>
-      {loading ? <p className="profile-empty" role="status">กำลังโหลดโปรไฟล์…</p> : profiles.length === 0 ? <p className="profile-empty">ยังไม่มีโปรไฟล์สมมติ · สร้างโปรไฟล์ด้านบนเพื่อเริ่มบันทึก</p> :
-        <label>เลือกโปรไฟล์ <select value={profile?.id ?? ''} onChange={event => {
+      {profiles.length === 0 ? loading
+        ? <p className="profile-empty" role="status">กำลังโหลดโปรไฟล์…</p>
+        : <p className="profile-empty">ยังไม่มีโปรไฟล์สมมติ · สร้างโปรไฟล์ด้านบนเพื่อเริ่มบันทึก</p> : <>
+        <label>เลือกโปรไฟล์ <select disabled={busy || loading} value={profile?.id ?? selectedProfileId.current ?? ''} onChange={event => {
           const id = Number(event.target.value); setError(''); setProfile(null)
           loadProfile(id).catch(() => setError('เปิดโปรไฟล์ไม่ได้ ลองเลือกอีกครั้ง'))
         }}>
           {profiles.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-        </select></label>}
+        </select></label>
+        {loading && <p className="profile-empty" role="status">กำลังโหลดโปรไฟล์…</p>}
+      </>}
     </section>
 
     {profile && <>
@@ -94,10 +115,15 @@ export function ProfileManager() {
           <strong>{item.nutrient}: {item.amount} {item.unit}</strong><span>เริ่มใช้ {item.effective_on}</span>
         </li>)}</ul> : <p className="profile-empty">ยังไม่มีเป้าหมายที่บันทึก · ระบบไม่เติมค่าแทน</p>}
         <form onSubmit={event => void submit(event, async () => {
-          const updated = await request<Profile>(`/experimental/profiles/${profile.id}/goals`, json({
+          await request<{ saved: true }>(`/experimental/profiles/${profile.id}/goals`, json({
             synthetic_only: true, clinician_set: true, ...goal,
           }))
-          setProfile(updated); setGoal({ nutrient: '', amount: '', unit: '', effective_on: '' })
+          if (selectedProfileId.current === profile.id) setProfile(current => current?.id === profile.id ? {
+            ...current, goals: [...current.goals, {
+              nutrient: goal.nutrient, amount: Number(goal.amount), unit: goal.unit, effective_on: goal.effective_on,
+            }],
+          } : current)
+          setGoal({ nutrient: '', amount: '', unit: '', effective_on: '' })
         }, 'บันทึกเป้าหมายแล้ว')}>
           <label>สารอาหารตามเอกสารที่ได้รับ <input required maxLength={80} value={goal.nutrient} onChange={event => setGoal({ ...goal, nutrient: event.target.value })} /></label>
           <div className="field-grid">
@@ -115,10 +141,15 @@ export function ProfileManager() {
           <strong>{item.kilograms} กก.</strong><span>วัดเมื่อ {item.measured_on}</span>
         </li>)}</ul> : <p className="profile-empty">ยังไม่มีข้อมูลน้ำหนักแห้ง</p>}
         <form onSubmit={event => void submit(event, async () => {
-          const updated = await request<Profile>(`/experimental/profiles/${profile.id}/dry-weights`, json({
+          await request<{ saved: true }>(`/experimental/profiles/${profile.id}/dry-weights`, json({
             synthetic_only: true, ...weight,
           }))
-          setProfile(updated); setWeight({ measured_on: '', kilograms: '' })
+          if (selectedProfileId.current === profile.id) setProfile(current => current?.id === profile.id ? {
+            ...current, dry_weights: [...current.dry_weights, {
+              measured_on: weight.measured_on, kilograms: Number(weight.kilograms),
+            }],
+          } : current)
+          setWeight({ measured_on: '', kilograms: '' })
         }, 'บันทึกน้ำหนักแล้ว')}>
           <div className="field-grid">
             <label>น้ำหนักแห้ง (กก.) <input required type="number" min="0.01" step="any" inputMode="decimal" value={weight.kilograms} onChange={event => setWeight({ ...weight, kilograms: event.target.value })} /></label>
