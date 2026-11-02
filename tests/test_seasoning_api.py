@@ -1,5 +1,6 @@
 import tempfile
 import sqlite3
+import os
 from concurrent.futures import ThreadPoolExecutor
 import unittest
 from pathlib import Path
@@ -8,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 from api.main import app, _demo_store, _suggestions
 from api.ocr import OCRResult
+from nutrition.seasonings import SeasoningStore
 
 
 class SeasoningApiTest(unittest.TestCase):
@@ -107,9 +109,33 @@ class SeasoningApiTest(unittest.TestCase):
             self.assertEqual(db.execute("SELECT count(*) FROM sqlite_master WHERE name = 'seasoning_brands'").fetchone()[0], 0)
 
     def test_concurrent_initialization_uses_complete_marker(self):
+        with patch('api.main.SeasoningStore', wraps=SeasoningStore) as store_factory:
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                stores = list(executor.map(lambda _: _demo_store(), range(8)))
+            self.assertEqual(store_factory.call_count, 1)
+        self.assertTrue(all(store is stores[0] for store in stores))
         with ThreadPoolExecutor(max_workers=4) as executor:
-            results = list(executor.map(lambda _: _demo_store().list(), range(8)))
+            results = list(executor.map(lambda store: store.list(), stores))
         self.assertEqual(results, [[]] * 8)
+
+    def test_replaced_marker_database_reinitializes_cached_store(self):
+        path = Path(self.tmp.name) / 'demo.db'
+        original_store = _demo_store()
+        replacement = Path(self.tmp.name) / 'replacement.db'
+        with sqlite3.connect(replacement) as db:
+            db.execute('CREATE TABLE experimental_demo_marker (marker TEXT NOT NULL)')
+            db.execute("INSERT INTO experimental_demo_marker VALUES ('synthetic-only-v1')")
+        os.replace(replacement, path)
+
+        replacement_store = _demo_store()
+        self.assertIsNot(replacement_store, original_store)
+        self.assertEqual(replacement_store.list(), [])
+
+    def test_ordinary_database_write_reuses_cached_store(self):
+        store = _demo_store()
+        response = self.client.post('/experimental/seasonings', json=self.payload)
+        self.assertEqual(response.status_code, 200)
+        self.assertIs(_demo_store(), store)
 
     def test_ocr_suggestions_require_review_before_persisting(self):
         raw = 'Serving size 15 ml\nNutrition per serving\nSodium 120 mg\nProtein 0 g'

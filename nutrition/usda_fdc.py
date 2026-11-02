@@ -228,7 +228,8 @@ class USDAFDCClient:
         result = self._request("foods/search", params={}, json=payload)
         if not isinstance(result, dict) or not isinstance(result.get("foods"), list):
             raise USDAFDCError("USDA returned an invalid search response")
-        foods = tuple(_food_summary(food) for food in result["foods"] if isinstance(food, dict))
+        foods = tuple(_food_summary(food) for food in result["foods"]
+                      if isinstance(food, dict) and (data_types is None or food.get("dataType") in data_types))
         total_pages = result.get("totalPages")
         total_hits = result.get("totalHits")
         return FoodPage(foods=foods, page_number=page_number,

@@ -7,9 +7,10 @@ export const nutrients = [
 ] as const
 export type NutrientKey = typeof nutrients[number][0]
 export type FoodState = 'raw' | 'cooked' | 'as_sold'
+export type IngredientSource = 'manual' | 'usda' | 'seasoning'
 export type Ingredient = {
   name: string; amount: string; unit: 'g' | 'ml'; state: FoodState; reference: string;
-  values: Record<NutrientKey, string>; seasoningVersionId: number | null
+  values: Record<NutrientKey, string>; source: IngredientSource; seasoningVersionId: number | null; fdcId: number | null; fdcState: FoodState | null
 }
 export type SavedSeasoning = {
   version_id: number; name: string; brand: string | null; basis_quantity: string; basis_unit: 'g' | 'ml';
@@ -24,8 +25,11 @@ export function buildCalculationPayload(ingredients: Ingredient[], portion: stri
     ingredients: ingredients.map(item => ({
       amount: item.amount, unit: item.unit, food_state: item.state,
       reference_quantity: item.reference, reference_unit: item.unit, reference_food_state: item.state,
+      source_type: item.source ?? (item.seasoningVersionId != null ? 'seasoning' : item.fdcId != null ? 'usda' : 'manual'),
       ...(item.seasoningVersionId == null ? {} : { seasoning_version_id: item.seasoningVersionId }),
-      ...Object.fromEntries(nutrients.map(([key]) => [key, item.values[key].trim() || null])),
+      ...(item.fdcId == null
+        ? Object.fromEntries(nutrients.map(([key]) => [key, item.values[key].trim() || null]))
+        : { fdc_id: item.fdcId }),
     })),
   }
 }
