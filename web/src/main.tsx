@@ -123,6 +123,7 @@ export function App() {
   const [savedSearchError, setSavedSearchError] = useState('')
   const [savedRecipes, setSavedRecipes] = useState<SavedRecipeSummary[]>([])
   const [showFavoriteRecipes, setShowFavoriteRecipes] = useState(false)
+  const favoriteFilterRef = useRef<HTMLButtonElement>(null)
   const [savedRecipesBusy, setSavedRecipesBusy] = useState(false)
   const [savedRecipesError, setSavedRecipesError] = useState('')
   const [savedRecipeId, setSavedRecipeId] = useState<number | null>(null)
@@ -206,6 +207,10 @@ export function App() {
       setSeasoningsError('')
     }).catch(() => setSeasoningsError('โหลดเครื่องปรุงที่บันทึกไว้ไม่ได้ ตรวจว่า API ทำงานอยู่บนเครื่องนี้'))
   }, [page])
+
+  useEffect(() => {
+    if (showFavoriteRecipes && favoriteRecipeCount === 0) favoriteFilterRef.current?.focus()
+  }, [favoriteRecipeCount, showFavoriteRecipes])
 
   function navigate(event: React.MouseEvent<HTMLAnchorElement>, nextPage: PageId) {
     event.preventDefault()
@@ -724,7 +729,7 @@ export function App() {
           {!savedRecipesBusy && !savedRecipesError && savedRecipes.length === 0 && <p>ยังไม่มีสูตรที่บันทึกไว้ · เพิ่มวัตถุดิบรุ่นที่ตรวจแล้ว ตั้งชื่อสูตร แล้วบันทึกด้านล่าง</p>}
           {!savedRecipesBusy && !savedRecipesError && savedRecipes.length > 0 && <div className="recipe-filters" role="group" aria-label="กรองสูตรอาหาร">
             <button type="button" className="thai-query-choice" aria-pressed={!showFavoriteRecipes} onClick={() => setShowFavoriteRecipes(false)}>สูตรทั้งหมด ({savedRecipes.length})</button>
-            <button type="button" className="thai-query-choice" aria-pressed={showFavoriteRecipes} onClick={() => setShowFavoriteRecipes(true)}>เมนูโปรด ({favoriteRecipeCount})</button>
+            <button ref={favoriteFilterRef} type="button" className="thai-query-choice" aria-pressed={showFavoriteRecipes} onClick={() => setShowFavoriteRecipes(true)}>เมนูโปรด ({favoriteRecipeCount})</button>
           </div>}
           {!savedRecipesBusy && !savedRecipesError && showFavoriteRecipes && favoriteRecipeCount === 0 && <p>ยังไม่มีเมนูโปรด · เลือก “สูตรทั้งหมด” แล้วกด “เพิ่มในรายการโปรด” ใต้สูตรที่อยากเปิดซ้ำ</p>}
           <ul className="usda-results">{visibleSavedRecipes.map(recipe => <li key={recipe.id}>
