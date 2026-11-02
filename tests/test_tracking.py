@@ -2,6 +2,7 @@
 
 import sqlite3
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 import unittest
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -130,6 +131,8 @@ class MealTrackingStoreTest(unittest.TestCase):
         )
         with sqlite3.connect(self.database) as db:
             replacements = (
+                ("INSERT OR REPLACE INTO meal_entry_seals(meal_entry_id, sealed_at) VALUES (?, ?)",
+                 (entry_id, "2026-01-01T00:00:00+00:00")),
                 ("INSERT OR REPLACE INTO meal_entries(id, profile_id, recipe_id, recipe_name, consumed_at_utc, local_date, portion) VALUES (?, ?, ?, ?, ?, ?, ?)",
                  (entry_id, self.profile_id, self.recipe_ids[1], "Replaced", "2026-01-02T00:00:00+00:00", "2026-01-02", "1")),
                 ("INSERT OR REPLACE INTO meal_entry_ingredients(meal_entry_id, position, ingredient_version_id, ingredient_name, amount, unit, food_state, version, provider, source_version, source_date, retrieved_on, source_reference, provenance, basis_quantity, basis_unit, source_food_state, reviewed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -190,6 +193,59 @@ class MealTrackingStoreTest(unittest.TestCase):
         result = self.tracking.get_daily_totals(self.profile_id, date(2026, 1, 3))
         self.assertEqual(result["entry_count"], 1)
         self.assertEqual(self.tracking.get_entry(second)["adjustment"]["action"], "void")
+
+    def test_correction_keeps_original_food_snapshot_after_recipe_edit(self):
+        first = self.tracking.record_consumption(
+            self.profile_id, self.recipe_ids[0], datetime(2026, 1, 3, tzinfo=timezone.utc), Decimal("1")
+        )
+        self.recipes.rename_recipe(self.recipe_ids[0], "Edited after log")
+        self.recipes.replace_ingredients(self.recipe_ids[0], [
+            (self.version_ids[1], Decimal("50"), "g", "raw"),
+        ])
+        replacement = self.tracking.correct_consumption(
+            first, datetime(2026, 1, 3, 12, tzinfo=timezone.utc), Decimal("0.5"), "synthetic correction"
+        )
+        corrected = self.tracking.get_entry(replacement)
+        self.assertEqual(corrected["recipe_name"], "Synthetic meal A")
+        self.assertEqual(corrected["ingredients"][0]["ingredient_version_id"], self.version_ids[0])
+        self.assertEqual(corrected["totals"]["protein_g"], (Decimal("5.0"), True))
+
+    def test_correction_failure_rolls_back_replacement_and_adjustment(self):
+        first = self.tracking.record_consumption(
+            self.profile_id, self.recipe_ids[0], datetime(2026, 1, 3, tzinfo=timezone.utc), Decimal("1")
+        )
+        insert_snapshot = self.tracking._insert_snapshot
+
+        def fail_after_replacement(*args, **kwargs):
+            insert_snapshot(*args, **kwargs)
+            raise RuntimeError("synthetic forced failure")
+
+        self.tracking._insert_snapshot = fail_after_replacement
+        with self.assertRaisesRegex(RuntimeError, "forced failure"):
+            self.tracking.correct_consumption(
+                first, datetime(2026, 1, 3, 12, tzinfo=timezone.utc), Decimal("0.5"), "synthetic correction"
+            )
+        self.tracking._insert_snapshot = insert_snapshot
+        self.assertIsNone(self.tracking.get_entry(first)["adjustment"])
+        self.assertEqual(self.tracking.get_daily_totals(self.profile_id, date(2026, 1, 3))["entry_count"], 1)
+
+    def test_concurrent_corrections_allow_only_one_replacement(self):
+        first = self.tracking.record_consumption(
+            self.profile_id, self.recipe_ids[0], datetime(2026, 1, 3, tzinfo=timezone.utc), Decimal("1")
+        )
+
+        def correct():
+            try:
+                return self.tracking.correct_consumption(
+                    first, datetime(2026, 1, 3, 12, tzinfo=timezone.utc), Decimal("0.5"), "synthetic correction"
+                )
+            except ValueError:
+                return None
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            replacements = list(pool.map(lambda _: correct(), range(2)))
+        self.assertEqual(sum(result is not None for result in replacements), 1)
+        self.assertEqual(self.tracking.get_daily_totals(self.profile_id, date(2026, 1, 3))["entry_count"], 1)
 
 
 if __name__ == "__main__":

@@ -145,6 +145,10 @@ class MealTrackingStore:
                     WHEN (SELECT COUNT(*) FROM meal_entry_ingredients WHERE meal_entry_id = NEW.meal_entry_id) = 0
                       OR (SELECT COUNT(*) FROM meal_entry_totals WHERE meal_entry_id = NEW.meal_entry_id) != {len(NUTRIENTS)}
                     BEGIN SELECT RAISE(ABORT, 'incomplete meal snapshot'); END;
+                CREATE TRIGGER IF NOT EXISTS meal_entry_seals_no_replace
+                    BEFORE INSERT ON meal_entry_seals
+                    WHEN EXISTS(SELECT 1 FROM meal_entry_seals WHERE meal_entry_id = NEW.meal_entry_id)
+                    BEGIN SELECT RAISE(ABORT, 'meal history is immutable'); END;
                 CREATE TRIGGER IF NOT EXISTS meal_entry_seals_no_update
                     BEFORE UPDATE ON meal_entry_seals BEGIN SELECT RAISE(ABORT, 'meal history is immutable'); END;
                 CREATE TRIGGER IF NOT EXISTS meal_entry_seals_no_delete
@@ -224,6 +228,59 @@ class MealTrackingStore:
         finally:
             db.close()
 
+    def _insert_snapshot(self, db, profile_id, recipe_id, recipe_name, consumed_at_utc,
+                         local_date, portion_text, rows, goals):
+        inputs = []
+        for row in rows:
+            reference = Measure(Decimal(row["basis_quantity"]), row["basis_unit"], row["source_food_state"])
+            amount = Measure(Decimal(row["amount"]), row["unit"], row["food_state"])
+            values = {key: Decimal(row[key]) if row[key] is not None else None for key in NUTRIENTS}
+            citation = f"{row['provider']} ({row['source_version']}): {row['source_reference']}"
+            inputs.append((amount, NutrientSource(reference, values, citation, bool(row["reviewed"]))))
+        totals, _ = calculate(inputs, Decimal(portion_text))
+        cursor = db.execute(
+            """INSERT INTO meal_entries
+               (profile_id, recipe_id, recipe_name, consumed_at_utc, local_date, portion)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (profile_id, recipe_id, recipe_name, consumed_at_utc, local_date, portion_text),
+        )
+        entry_id = cursor.lastrowid
+        nutrient_columns = ", ".join(f'"{key}"' for key in NUTRIENTS)
+        ingredient_placeholders = ", ".join("?" for _ in range(18 + len(NUTRIENTS)))
+        db.executemany(
+            f"""INSERT INTO meal_entry_ingredients
+                (meal_entry_id, position, ingredient_version_id, ingredient_name, amount, unit,
+                 food_state, version, provider, source_version, source_date, retrieved_on,
+                 source_reference, provenance, basis_quantity, basis_unit, source_food_state, reviewed,
+                 {nutrient_columns})
+                VALUES ({ingredient_placeholders})""",
+            [(
+                entry_id, row["position"], row["ingredient_version_id"], row["ingredient_name"],
+                row["amount"], row["unit"], row["food_state"], row["version"], row["provider"],
+                row["source_version"], row["source_date"], row["retrieved_on"], row["source_reference"],
+                row["provenance"], row["basis_quantity"], row["basis_unit"], row["source_food_state"],
+                row["reviewed"], *(row[key] for key in NUTRIENTS),
+            ) for row in rows],
+        )
+        db.executemany(
+            """INSERT INTO meal_entry_goals
+               (meal_entry_id, position, goal_id, nutrient, amount, unit, effective_on, confirmed_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            [(entry_id, position, row["goal_id"] if "goal_id" in row.keys() else row["id"], row["nutrient"],
+              str(row["amount"]), row["unit"], row["effective_on"], row["confirmed_by"])
+             for position, row in enumerate(goals)],
+        )
+        db.executemany(
+            "INSERT INTO meal_entry_totals(meal_entry_id, nutrient, subtotal, complete) VALUES (?, ?, ?, ?)",
+            [(entry_id, nutrient, str(value) if value is not None else None, int(complete))
+             for nutrient, (value, complete) in totals.items()],
+        )
+        db.execute(
+            "INSERT INTO meal_entry_seals(meal_entry_id, sealed_at) VALUES (?, ?)",
+            (entry_id, datetime.now(timezone.utc).isoformat(timespec="microseconds")),
+        )
+        return entry_id
+
     def record_consumption(self, profile_id: int, recipe_id: int,
                            consumed_at: datetime, portion: Decimal) -> int:
         """Record an actual consumed fraction and freeze the source and goal inputs used."""
@@ -252,14 +309,6 @@ class MealTrackingStore:
             ).fetchall()
             if not rows:
                 raise ValueError("recipe requires at least one ingredient")
-            inputs = []
-            for row in rows:
-                reference = Measure(Decimal(row["basis_quantity"]), row["basis_unit"], row["source_food_state"])
-                amount = Measure(Decimal(row["amount"]), row["unit"], row["food_state"])
-                values = {key: Decimal(row[key]) if row[key] is not None else None for key in NUTRIENTS}
-                citation = f"{row['provider']} ({row['source_version']}): {row['source_reference']}"
-                inputs.append((amount, NutrientSource(reference, values, citation, bool(row["reviewed"]))))
-            totals, _ = calculate(inputs, portion)
             goals = db.execute(
                 """SELECT id, nutrient, amount, unit, effective_on, confirmed_by
                    FROM (
@@ -271,47 +320,8 @@ class MealTrackingStore:
                    ) WHERE rank = 1 ORDER BY nutrient""",
                 (profile_id, local_date),
             ).fetchall()
-            cursor = db.execute(
-                """INSERT INTO meal_entries
-                   (profile_id, recipe_id, recipe_name, consumed_at_utc, local_date, portion)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (profile_id, recipe_id, recipe["name"], consumed_at_utc, local_date, portion_text),
-            )
-            entry_id = cursor.lastrowid
-            nutrient_columns = ", ".join(f'"{key}"' for key in NUTRIENTS)
-            ingredient_placeholders = ", ".join("?" for _ in range(18 + len(NUTRIENTS)))
-            db.executemany(
-                f"""INSERT INTO meal_entry_ingredients
-                    (meal_entry_id, position, ingredient_version_id, ingredient_name, amount, unit,
-                     food_state, version, provider, source_version, source_date, retrieved_on,
-                     source_reference, provenance, basis_quantity, basis_unit, source_food_state, reviewed,
-                     {nutrient_columns})
-                    VALUES ({ingredient_placeholders})""",
-                [(
-                    entry_id, row["position"], row["ingredient_version_id"], row["ingredient_name"],
-                    row["amount"], row["unit"], row["food_state"], row["version"], row["provider"],
-                    row["source_version"], row["source_date"], row["retrieved_on"], row["source_reference"],
-                    row["provenance"], row["basis_quantity"], row["basis_unit"], row["source_food_state"],
-                    row["reviewed"], *(row[key] for key in NUTRIENTS),
-                ) for row in rows],
-            )
-            db.executemany(
-                """INSERT INTO meal_entry_goals
-                   (meal_entry_id, position, goal_id, nutrient, amount, unit, effective_on, confirmed_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                [(entry_id, position, row["id"], row["nutrient"], str(row["amount"]), row["unit"],
-                  row["effective_on"], row["confirmed_by"]) for position, row in enumerate(goals)],
-            )
-            db.executemany(
-                "INSERT INTO meal_entry_totals(meal_entry_id, nutrient, subtotal, complete) VALUES (?, ?, ?, ?)",
-                [(entry_id, nutrient, str(value) if value is not None else None, int(complete))
-                 for nutrient, (value, complete) in totals.items()],
-            )
-            db.execute(
-                "INSERT INTO meal_entry_seals(meal_entry_id, sealed_at) VALUES (?, ?)",
-                (entry_id, datetime.now(timezone.utc).isoformat(timespec="microseconds")),
-            )
-            return entry_id
+            return self._insert_snapshot(db, profile_id, recipe_id, recipe["name"], consumed_at_utc,
+                                         local_date, portion_text, rows, goals)
 
     def void_consumption(self, entry_id: int, reason: str) -> None:
         """Append a user-asserted void; original snapshot remains available for audit."""
@@ -333,18 +343,29 @@ class MealTrackingStore:
         entry_id = _positive_id(entry_id, "entry_id")
         if not isinstance(reason, str) or not reason.strip():
             raise ValueError("reason must be non-empty text")
+        consumed_at_utc, local_date = _consumed_at(consumed_at)
+        portion_text = _portion(portion)
         with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             original = db.execute(
-                "SELECT profile_id, recipe_id FROM meal_entries WHERE id = ?", (entry_id,)
+                """SELECT e.profile_id, e.recipe_id, e.recipe_name
+                   FROM meal_entries e JOIN meal_entry_seals s ON s.meal_entry_id = e.id
+                   WHERE e.id = ?""", (entry_id,)
             ).fetchone()
             if original is None:
                 raise LookupError("meal entry not found")
             if db.execute("SELECT 1 FROM meal_entry_adjustments WHERE meal_entry_id = ?", (entry_id,)).fetchone():
                 raise ValueError("meal entry already adjusted")
-            profile_id, recipe_id = original["profile_id"], original["recipe_id"]
-        replacement_id = self.record_consumption(profile_id, recipe_id, consumed_at, portion)
-        with self._connect() as db:
-            db.execute("BEGIN IMMEDIATE")
+            rows = db.execute(
+                "SELECT * FROM meal_entry_ingredients WHERE meal_entry_id = ? ORDER BY position", (entry_id,)
+            ).fetchall()
+            goals = db.execute(
+                "SELECT * FROM meal_entry_goals WHERE meal_entry_id = ? ORDER BY position", (entry_id,)
+            ).fetchall()
+            replacement_id = self._insert_snapshot(
+                db, original["profile_id"], original["recipe_id"], original["recipe_name"],
+                consumed_at_utc, local_date, portion_text, rows, goals,
+            )
             db.execute(
                 "INSERT INTO meal_entry_adjustments VALUES (?, 'correct', ?, ?, ?)",
                 (entry_id, replacement_id, reason.strip(), datetime.now(timezone.utc).isoformat(timespec="microseconds")),
