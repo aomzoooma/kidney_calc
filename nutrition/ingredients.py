@@ -183,3 +183,52 @@ class IngredientStore:
                     item[nutrient] = Decimal(item[nutrient]) if item[nutrient] is not None else None
                 versions.append(item)
             return {"id": ingredient["id"], "name": ingredient["name"], "versions": versions}
+
+    def search_reviewed(self, query: str, *, limit: int = 50) -> list[dict]:
+        """Search only locally saved, user-marked-reviewed source versions."""
+        query = _text(query, "query")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        with self._connect() as db:
+            rows = db.execute("""SELECT i.id AS ingredient_id, i.name, v.id AS version_id,
+                v.version, v.provider, v.source_version, v.source_date, v.retrieved_on,
+                v.source_reference, v.provenance, v.basis_quantity, v.basis_unit,
+                v.food_state, v.reviewed, b.brand,
+                v.energy_kcal, v.protein_g, v.sodium_mg, v.potassium_mg, v.phosphorus_mg
+                FROM ingredients i JOIN ingredient_versions v ON v.ingredient_id = i.id
+                LEFT JOIN seasoning_brands b ON b.ingredient_id = i.id
+                WHERE v.reviewed = 1 AND (i.name LIKE ? ESCAPE '\\' COLLATE NOCASE
+                    OR COALESCE(b.brand, '') LIKE ? ESCAPE '\\' COLLATE NOCASE)
+                ORDER BY i.name COLLATE NOCASE, v.id DESC LIMIT ?""",
+                (f"%{escaped}%", f"%{escaped}%", limit)).fetchall()
+        return [{
+            "ingredient_id": row["ingredient_id"], "version_id": row["version_id"],
+            "name": row["name"], "brand": row["brand"] or None,
+            "version": row["version"], "provider": row["provider"],
+            "source_version": row["source_version"], "source_date": row["source_date"],
+            "retrieved_on": row["retrieved_on"], "source_reference": row["source_reference"],
+            "provenance": row["provenance"], "basis_quantity": row["basis_quantity"],
+            "basis_unit": row["basis_unit"], "food_state": row["food_state"],
+            "reviewed": bool(row["reviewed"]),
+            "nutrients": {key: row[key] for key in NUTRIENTS},
+        } for row in rows]
+
+    def get_reviewed_version(self, version_id: int) -> dict | None:
+        """Resolve one immutable, locally reviewed ingredient version by ID."""
+        if isinstance(version_id, bool) or not isinstance(version_id, int) or version_id <= 0:
+            raise ValueError("version_id must be a positive integer")
+        with self._connect() as db:
+            row = db.execute("""SELECT i.id AS ingredient_id, i.name, v.id AS version_id,
+                v.version, v.provider, v.source_version, v.source_date, v.retrieved_on,
+                v.source_reference, v.provenance, v.basis_quantity, v.basis_unit,
+                v.food_state, v.reviewed, v.energy_kcal, v.protein_g, v.sodium_mg,
+                v.potassium_mg, v.phosphorus_mg
+                FROM ingredients i JOIN ingredient_versions v ON v.ingredient_id = i.id
+                WHERE v.id = ? AND v.reviewed = 1""", (version_id,)).fetchone()
+        if row is None:
+            return None
+        return {**dict(row), "reviewed": bool(row["reviewed"]),
+                "basis_quantity": Decimal(row["basis_quantity"]),
+                "nutrients": {key: Decimal(row[key]) if row[key] is not None else None
+                              for key in NUTRIENTS}}

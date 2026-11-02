@@ -10,8 +10,8 @@ const { buildCalculationPayload, isCurrentRevision } = await import(`data:text/j
 test('payload keeps multiple ingredient measures and sends unknown nutrients as null', () => {
   const values = { energy_kcal: '130', protein_g: '', sodium_mg: '4', potassium_mg: '', phosphorus_mg: '' }
   const ingredients = [
-    { name: 'rice', amount: '150', unit: 'g', state: 'cooked', reference: '100', source: 'manual', seasoningVersionId: null, fdcId: null, values },
-    { name: 'soup', amount: '50', unit: 'ml', state: 'as_sold', reference: '100', source: 'manual', seasoningVersionId: null, fdcId: null, values: { ...values, protein_g: '2' } },
+    { name: 'rice', amount: '150', unit: 'g', state: 'cooked', reference: '100', source: 'manual', seasoningVersionId: null, ingredientVersionId: null, fdcId: null, values },
+    { name: 'soup', amount: '50', unit: 'ml', state: 'as_sold', reference: '100', source: 'manual', seasoningVersionId: null, ingredientVersionId: null, fdcId: null, values: { ...values, protein_g: '2' } },
   ]
   assert.deepEqual(buildCalculationPayload(ingredients, '0.5'), {
     synthetic_only: true, portion: '0.5', ingredients: [
@@ -19,6 +19,17 @@ test('payload keeps multiple ingredient measures and sends unknown nutrients as 
       { amount: '50', unit: 'ml', food_state: 'as_sold', reference_quantity: '100', reference_unit: 'ml', reference_food_state: 'as_sold', source_type: 'manual', energy_kcal: '130', protein_g: '2', sodium_mg: '4', potassium_mg: null, phosphorus_mg: null },
     ],
   })
+})
+
+test('saved local version submits only its immutable ID and unit/state', () => {
+  const item = { name: 'ข้าวสมมติ', amount: '50', unit: 'g', state: 'cooked', reference: '100',
+    source: 'saved', seasoningVersionId: null, ingredientVersionId: 24, fdcId: null, values: {
+      energy_kcal: '999', protein_g: '999', sodium_mg: '999', potassium_mg: '999', phosphorus_mg: '999',
+    } }
+  const [payload] = buildCalculationPayload([item], '1').ingredients
+  assert.deepEqual(payload, { amount: '50', unit: 'g', food_state: 'cooked',
+    reference_quantity: '100', reference_unit: 'g', reference_food_state: 'cooked',
+    source_type: 'saved', ingredient_version_id: 24 })
 })
 
 test('delayed response is discarded after recipe changes', async () => {

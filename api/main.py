@@ -56,8 +56,9 @@ class IngredientInput(BaseModel):
     reference_quantity: Positive
     reference_unit: Literal["g", "ml"]
     reference_food_state: Literal["raw", "cooked", "as_sold"]
-    source_type: Optional[Literal["manual", "usda", "seasoning"]] = None
+    source_type: Optional[Literal["manual", "usda", "seasoning", "saved"]] = None
     seasoning_version_id: Optional[Annotated[StrictInt, Field(gt=0)]] = None
+    ingredient_version_id: Optional[Annotated[StrictInt, Field(gt=0)]] = None
     fdc_id: Optional[Annotated[StrictInt, Field(gt=0)]] = None
     energy_kcal: Optional[Number] = None
     protein_g: Optional[Number] = None
@@ -244,6 +245,16 @@ def list_seasonings():
     return {'items': _demo_store().list()}
 
 
+@app.get('/experimental/ingredients/search')
+def search_saved_ingredients(q: str = Query(min_length=1, max_length=100)):
+    query = q.strip()
+    if not query:
+        raise HTTPException(status_code=422, detail='Enter a food name to search saved records')
+    # This lookup stays in the local SQLite store. It does not contact USDA or another service.
+    return {'items': _demo_store().ingredients.search_reviewed(query),
+            'local_only': True, 'reviewed_by_user': True}
+
+
 @app.post('/experimental/seasonings')
 async def save_seasoning(request: Request):
     if request.headers.get('content-type', '').split(';', 1)[0].strip().lower() != 'application/json':
@@ -269,16 +280,22 @@ async def save_seasoning(request: Request):
 def calculate_recipe(payload: RecipeInput):
     ingredients = []
     source_details = []
+    saved_source_details = []
     for index, item in enumerate(payload.ingredients, 1):
-        if item.source_type == "usda" and (item.fdc_id is None or item.seasoning_version_id is not None
+        if item.ingredient_version_id is not None and item.source_type != "saved":
+            raise HTTPException(status_code=422, detail="A locally saved ingredient ID requires the saved source type")
+        if item.source_type == "usda" and (item.fdc_id is None or item.seasoning_version_id is not None or item.ingredient_version_id is not None
                 or any(getattr(item, name) is not None for name in NUTRIENTS)):
             raise HTTPException(status_code=422, detail="Select a USDA record; its nutrients are resolved by the server")
-        if item.source_type == "seasoning" and (item.seasoning_version_id is None or item.fdc_id is not None):
+        if item.source_type == "seasoning" and (item.seasoning_version_id is None or item.fdc_id is not None or item.ingredient_version_id is not None):
             raise HTTPException(status_code=422, detail="Select a saved seasoning version")
-        if item.source_type == "manual" and (item.fdc_id is not None or item.seasoning_version_id is not None):
+        if item.source_type == "saved" and (item.ingredient_version_id is None or item.seasoning_version_id is not None or item.fdc_id is not None
+                or any(getattr(item, name) is not None for name in NUTRIENTS)):
+            raise HTTPException(status_code=422, detail="Select a saved reviewed ingredient version; values are resolved by the server")
+        if item.source_type == "manual" and (item.fdc_id is not None or item.seasoning_version_id is not None or item.ingredient_version_id is not None):
             raise HTTPException(status_code=422, detail="Manual source cannot include a saved source ID")
         if item.fdc_id is not None:
-            if item.seasoning_version_id is not None or any(
+            if item.seasoning_version_id is not None or item.ingredient_version_id is not None or any(
                     getattr(item, name) is not None for name in NUTRIENTS):
                 raise HTTPException(status_code=422, detail="USDA food values are resolved by the server")
             try:
@@ -309,6 +326,23 @@ def calculate_recipe(payload: RecipeInput):
             ingredients.append((amount, source))
             continue
         amount = Measure(item.amount, item.unit, item.food_state)
+        if item.ingredient_version_id is not None:
+            saved = _demo_store().ingredients.get_reviewed_version(item.ingredient_version_id)
+            if saved is None:
+                raise HTTPException(status_code=422, detail="Unknown locally saved reviewed ingredient version")
+            if (item.unit != saved["basis_unit"] or item.food_state != saved["food_state"]):
+                raise HTTPException(status_code=422, detail="Amount unit and food state must match the saved ingredient")
+            reference = Measure(saved["basis_quantity"], saved["basis_unit"], saved["food_state"])
+            source = NutrientSource(reference, saved["nutrients"],
+                                    f"local reviewed ingredient version {saved['version_id']}", reviewed=True)
+            saved_source_details.append({
+                "version_id": saved["version_id"], "name": saved["name"],
+                "provider": saved["provider"], "source_version": saved["source_version"],
+                "source_reference": saved["source_reference"], "provenance": saved["provenance"],
+                "retrieved_on": saved["retrieved_on"], "food_state": saved["food_state"],
+            })
+            ingredients.append((amount, source))
+            continue
         if item.seasoning_version_id is not None:
             seasoning = _demo_store().get_reviewed_version(item.seasoning_version_id)
             if seasoning is None:
@@ -335,6 +369,7 @@ def calculate_recipe(payload: RecipeInput):
         "rounding": "Decimal context precision is 28 significant digits; no display rounding is applied.",
         "portion": str(payload.portion),
         "sources": source_details,
+        "saved_sources": saved_source_details,
         "totals": {
             name: {"value": str(value) if value is not None else None, "complete": complete}
             for name, (value, complete) in totals.items()

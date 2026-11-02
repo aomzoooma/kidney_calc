@@ -50,7 +50,7 @@ describe('manual recipe UI', () => {
     const body = JSON.parse(String(calculation?.[1]?.body))
     expect(body.ingredients[0].seasoning_version_id).toBe(42)
     expect(body.ingredients[0]).toMatchObject({ unit: 'ml', food_state: 'as_sold', reference_quantity: '15' })
-    expect(body.ingredients[0].sodium_mg).toBe('0')
+    expect(body.ingredients[0]).not.toHaveProperty('sodium_mg')
   })
 
   it('requires synthetic-only confirmation', () => {
@@ -84,7 +84,7 @@ describe('manual recipe UI', () => {
     expect(screen.getAllByLabelText('ชื่อวัตถุดิบ')[0]).toHaveProperty('value', 'Manual rice')
     expect(screen.getAllByLabelText(/ปริมาณที่ใช้/)[0]).toHaveProperty('value', '25')
     expect(screen.getByText(/USDA FoodData Central.*ID 77.*สภาพ: สุก/)).toBeTruthy()
-    expect(screen.getByText(/ไม่มีการแปลหรือเทียบชื่ออาหารไทย/)).toBeTruthy()
+    expect(screen.getByText(/ไม่ใช่การแปลหรือเทียบอาหารไทย/)).toBeTruthy()
     expect(screen.getAllByText(/รายการอ้างอิงไม่ใช่สินค้าแบรนด์/).length).toBeGreaterThan(1)
     fireEvent.change(document.querySelector<HTMLInputElement>('[data-ingredient-index="1"] input[type="number"]')!, { target: { value: '100' } })
     fireEvent.click(screen.getByRole('checkbox', { name: /ยืนยันว่ากำลังทดสอบ/ }))
@@ -224,5 +224,82 @@ describe('manual recipe UI', () => {
     })
     expect(screen.queryByText('สารอาหารโดยประมาณ')).toBeNull()
     expect(screen.queryByText('777 กิโลแคลอรี')).toBeNull()
+  })
+
+  it('searches local reviewed Thai entries first and submits only saved version ID', async () => {
+    const saved = { ingredient_id: 8, version_id: 24, name: 'ข้าวสมมติ', brand: null,
+      version: 'synthetic-v1', provider: 'user-entered', source_version: 'reviewed fixture',
+      source_date: null, retrieved_on: '2026-11-02', source_reference: 'synthetic source',
+      provenance: 'synthetic user-reviewed fixture', basis_quantity: '100', basis_unit: 'g',
+      food_state: 'cooked', reviewed: true,
+      nutrients: { energy_kcal: '123', protein_g: null, sodium_mg: '0', potassium_mg: null, phosphorus_mg: null } }
+    const fetchMock = vi.fn(async (url: string) => url.startsWith('/experimental/ingredients/search')
+      ? { ok: true, json: async () => ({ items: [saved], local_only: true }) }
+      : url === '/experimental/seasonings'
+        ? { ok: true, json: async () => ({ items: [] }) }
+        : { ok: true, json: async () => response })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getByLabelText('ชื่อที่บันทึกไว้'), { target: { value: 'ข้าวสมมติ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'ค้นหารายการในเครื่อง' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'เลือกเป็นรายการใหม่' }))
+    expect(screen.getByText(/รายการในเครื่อง · รุ่น 24/)).toBeTruthy()
+    expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/experimental/usda/search'))).toBe(false)
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] input[type="number"]')!, { target: { value: '100' } })
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-ingredient-index="1"] input[type="number"]')!, { target: { value: '50' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /ยืนยันว่ากำลังทดสอบ/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'คำนวณสารอาหาร' }))
+    expect(fetchMock.mock.calls.some(([url]) => url === '/experimental/recipes/calculate')).toBe(true)
+    await screen.findByText('สารอาหารโดยประมาณ · 1 ส่วน')
+    const calculation = fetchMock.mock.calls.find(([url]) => url === '/experimental/recipes/calculate')
+    const body = JSON.parse(String(calculation?.[1]?.body))
+    expect(body.ingredients[1]).toMatchObject({ source_type: 'saved', ingredient_version_id: 24, amount: '50', unit: 'g', food_state: 'cooked' })
+    expect(body.ingredients[1]).not.toHaveProperty('energy_kcal')
+    expect(body.ingredients[1]).not.toHaveProperty('sodium_mg')
+  })
+
+  it('clears saved values when switching the selected record to manual', async () => {
+    const saved = { ingredient_id: 8, version_id: 24, name: 'ข้าวสมมติ', brand: null,
+      version: 'synthetic-v1', provider: 'user-entered', source_version: 'reviewed fixture',
+      source_date: null, retrieved_on: '2026-11-02', source_reference: 'synthetic source',
+      provenance: 'synthetic user-reviewed fixture', basis_quantity: '100', basis_unit: 'g',
+      food_state: 'cooked', reviewed: true,
+      nutrients: { energy_kcal: '123', protein_g: null, sodium_mg: '0', potassium_mg: null, phosphorus_mg: null } }
+    const fetchMock = vi.fn(async (url: string) => url.startsWith('/experimental/ingredients/search')
+      ? { ok: true, json: async () => ({ items: [saved], local_only: true }) }
+      : { ok: true, json: async () => ({ items: [] }) })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    fireEvent.change(screen.getByLabelText('ชื่อที่บันทึกไว้'), { target: { value: 'ข้าวสมมติ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'ค้นหารายการในเครื่อง' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'เลือกเป็นรายการใหม่' }))
+    fireEvent.change(screen.getAllByLabelText(/แหล่งข้อมูลวัตถุดิบ/)[1], { target: { value: 'manual' } })
+    expect(screen.queryByText(/รายการในเครื่อง · รุ่น 24/)).toBeNull()
+    expect(document.querySelector<HTMLInputElement>('[data-ingredient-index="1"] .nutrient-grid input')?.value).toBe('')
+  })
+
+  it('clears and ignores delayed local results after the Thai query changes', async () => {
+    let releaseSearch!: (value: { ok: boolean; json: () => Promise<{ items: object[] }> }) => void
+    const delayedSearch = new Promise<{ ok: boolean; json: () => Promise<{ items: object[] }> }>(resolve => { releaseSearch = resolve })
+    const staleItem = { ingredient_id: 8, version_id: 24, name: 'ผลเก่า', brand: null,
+      version: 'v1', provider: 'local', source_version: 'reviewed', source_date: null,
+      retrieved_on: '2026-11-02', source_reference: 'synthetic', provenance: 'synthetic fixture',
+      basis_quantity: '100', basis_unit: 'g', food_state: 'cooked', reviewed: true,
+      nutrients: { energy_kcal: '1', protein_g: null, sodium_mg: null, potassium_mg: null, phosphorus_mg: null } }
+    const fetchMock = vi.fn((url: string) => url.startsWith('/experimental/ingredients/search')
+      ? delayedSearch
+      : Promise.resolve({ ok: true, json: async () => ({ items: [] }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    const query = screen.getByLabelText('ชื่อที่บันทึกไว้')
+    fireEvent.change(query, { target: { value: 'คำค้นเก่า' } })
+    fireEvent.click(screen.getByRole('button', { name: 'ค้นหารายการในเครื่อง' }))
+    fireEvent.change(query, { target: { value: 'คำค้นใหม่' } })
+    expect(screen.queryByText('ผลเก่า')).toBeNull()
+    await act(async () => { releaseSearch({ ok: true, json: async () => ({ items: [staleItem] }) }); await delayedSearch })
+    expect(screen.queryByText('ผลเก่า')).toBeNull()
   })
 })
