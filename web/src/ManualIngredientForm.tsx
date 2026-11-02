@@ -43,7 +43,8 @@ export function ManualIngredientForm() {
   return <section className="seasoning-flow manual-ingredient" aria-labelledby="manual-ingredient-title">
     <div className="page-intro"><h2 id="manual-ingredient-title">บันทึกวัตถุดิบจากข้อมูลสมมติ</h2>
       <p>บันทึกในเครื่องนี้เท่านั้น · ห้ามใช้ฉลากจริง ข้อมูลผู้ป่วย หรือค่าที่คาดเดา · ค่าที่เว้นว่างจะยังเป็น “ไม่ทราบ”</p></div>
-    <form onSubmit={save}>
+    <form onSubmit={save} onChange={() => setSavedVersion(null)}>
+      <fieldset className="manual-ingredient-fields" disabled={busy}>
       <label>ชื่อวัตถุดิบ <input required maxLength={150} value={name} onChange={event => setName(event.target.value)} autoComplete="off" /></label>
       <div className="field-grid">
         <label>แหล่งข้อมูล / ผู้เผยแพร่ <input required maxLength={150} value={provider} onChange={event => setProvider(event.target.value)} /></label>
@@ -68,6 +69,7 @@ export function ManualIngredientForm() {
       </div>
       <label className="attestation"><input required type="checkbox" /> ยืนยันว่าเป็นข้อมูลสมมติ และตรวจทานกับแหล่งที่ระบุแล้ว</label>
       <button className="submit-button" type="submit" disabled={busy}>{busy ? 'กำลังบันทึก…' : 'บันทึกตัวอย่างวัตถุดิบ'}</button>
+      </fieldset>
     </form>
     {savedVersion !== null && <p className="success" role="status">บันทึกแล้ว · รุ่น {savedVersion} · ค้นหาชื่อรายการนี้ได้ในหน้า “สูตรอาหาร”</p>}
     {error && <p className="error" role="alert">{error}</p>}

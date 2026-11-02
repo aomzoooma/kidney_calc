@@ -1,9 +1,12 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { App } from '../src/main'
 
 const calculation = {
   experimental: true, clinical_use: false, rounding: 'test', portion: '1',
+  saved_sources: [{ version_id: 24, name: 'ข้าวทดสอบ', provider: 'Synthetic publisher', source_version: 'fixture-v1',
+    source_date: '2026-01-02', source_reference: 'synthetic page 4', provenance: 'synthetic manual transcription',
+    retrieved_on: '2026-11-03', food_state: 'cooked' }],
   totals: Object.fromEntries(['energy_kcal', 'protein_g', 'sodium_mg', 'potassium_mg', 'phosphorus_mg']
     .map(key => [key, { value: null, complete: false }])),
 }
@@ -78,4 +81,52 @@ it('saves reviewed synthetic source metadata, then finds and selects that versio
   const body = JSON.parse(String(recipeCall?.[1]?.body))
   expect(body.ingredients[1]).toMatchObject({ source_type: 'saved', ingredient_version_id: 24, amount: '50', food_state: 'cooked' })
   expect(body.ingredients[1]).not.toHaveProperty('sodium_mg')
+  await screen.findByText('สารอาหารโดยประมาณ · 1 ส่วน')
+  expect(await screen.findAllByText(/วันที่แหล่งข้อมูล 2026-01-02/)).toHaveLength(2)
+})
+
+it('blocks edits while save is pending and clears saved status after a later edit', async () => {
+  type SaveResponse = { ok: boolean; json: () => Promise<{ ingredient_id: number; version_id: number }> }
+  let resolveSave!: (response: SaveResponse) => void
+  const pendingSave = new Promise<SaveResponse>(resolve => { resolveSave = resolve })
+  const fetchMock = vi.fn(async (url: string) => url === '/experimental/ingredients'
+    ? pendingSave : { ok: true, json: async () => ({ items: [] }) })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<App />)
+
+  fireEvent.click(screen.getByRole('link', { name: 'วัตถุดิบและเครื่องปรุง' }))
+  const saveForm = within(screen.getByRole('heading', { name: 'บันทึกวัตถุดิบจากข้อมูลสมมติ' }).closest('section')!)
+  const name = saveForm.getByLabelText('ชื่อวัตถุดิบ') as HTMLInputElement
+  fireEvent.change(name, { target: { value: 'ข้าวทดสอบ' } })
+  fireEvent.change(saveForm.getByLabelText('แหล่งข้อมูล / ผู้เผยแพร่'), { target: { value: 'Synthetic publisher' } })
+  fireEvent.change(saveForm.getByLabelText('รุ่นหรือฉบับของแหล่งข้อมูล'), { target: { value: 'fixture-v1' } })
+  fireEvent.change(saveForm.getByLabelText('ตำแหน่งอ้างอิง เช่น หน้าเอกสารหรือ URL'), { target: { value: 'synthetic reference' } })
+  fireEvent.change(saveForm.getByLabelText('วิธีได้มาของข้อมูล'), { target: { value: 'synthetic manual transcription' } })
+  fireEvent.change(saveForm.getByLabelText('ข้อมูลสารอาหารต่อปริมาณ'), { target: { value: '100' } })
+  fireEvent.change(saveForm.getByLabelText('หน่วยฐาน'), { target: { value: 'g' } })
+  fireEvent.change(saveForm.getByLabelText('สภาพอาหาร'), { target: { value: 'raw' } })
+  fireEvent.click(saveForm.getByRole('checkbox'))
+  const submit = saveForm.getByRole('button', { name: 'บันทึกตัวอย่างวัตถุดิบ' })
+  const form = submit.closest('form') as HTMLFormElement
+  const fieldset = form.querySelector('fieldset') as HTMLFieldSetElement
+  expect(Array.from(form.elements).filter((element: Element) => !(element as HTMLInputElement).validity.valid))
+    .toEqual([])
+  fireEvent.click(submit)
+  expect(fetchMock).toHaveBeenCalled()
+  await waitFor(() => {
+    expect(fieldset.disabled).toBe(true)
+    expect(name.matches(':disabled')).toBe(true)
+    expect((submit as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  await act(async () => {
+    resolveSave({ ok: true, json: async () => ({ ingredient_id: 1, version_id: 1 }) })
+    await pendingSave
+  })
+  expect((await screen.findByRole('status')).textContent).toContain('บันทึกแล้ว · รุ่น 1')
+  expect(fieldset.disabled).toBe(false)
+  expect(name.matches(':disabled')).toBe(false)
+  fireEvent.change(name, { target: { value: 'ข้าวที่แก้แล้ว' } })
+  expect(name.value).toBe('ข้าวที่แก้แล้ว')
+  expect(screen.queryByRole('status')).toBeNull()
 })

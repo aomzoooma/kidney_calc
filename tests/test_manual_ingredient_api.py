@@ -54,6 +54,7 @@ class ManualIngredientApiTest(unittest.TestCase):
         totals = calculation.json()['totals']
         self.assertEqual(totals['energy_kcal'], {'value': None, 'complete': False})
         self.assertEqual(totals['sodium_mg'], {'value': '0', 'complete': True})
+        self.assertEqual(calculation.json()['saved_sources'][0]['source_date'], '2026-01-02')
 
     def test_rejects_unreviewed_or_non_synthetic_records_without_saving(self):
         for change in ({'reviewed': False}, {'synthetic_only': False},

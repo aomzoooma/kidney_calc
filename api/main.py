@@ -380,7 +380,8 @@ def calculate_recipe(payload: RecipeInput):
             saved_source_details.append({
                 "version_id": saved["version_id"], "name": saved["name"],
                 "provider": saved["provider"], "source_version": saved["source_version"],
-                "source_reference": saved["source_reference"], "provenance": saved["provenance"],
+                "source_date": saved["source_date"], "source_reference": saved["source_reference"],
+                "provenance": saved["provenance"],
                 "retrieved_on": saved["retrieved_on"], "food_state": saved["food_state"],
             })
             ingredients.append((amount, source))
