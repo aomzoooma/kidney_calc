@@ -2,6 +2,8 @@
 
 from decimal import Decimal
 from dataclasses import dataclass
+from collections.abc import Mapping
+from types import MappingProxyType
 
 
 NUTRIENTS = ('energy_kcal', 'protein_g', 'sodium_mg', 'potassium_mg', 'phosphorus_mg')
@@ -14,6 +16,18 @@ class Measure:
     food_state: str
 
 
+@dataclass(frozen=True)
+class NutrientSource:
+    reference: Measure
+    values: dict
+    citation: str
+    reviewed: bool = False
+
+    def __post_init__(self):
+        if isinstance(self.values, Mapping):
+            object.__setattr__(self, 'values', MappingProxyType(dict(self.values)))
+
+
 def _positive(value):
     return isinstance(value, Decimal) and value.is_finite() and value > 0
 
@@ -21,19 +35,26 @@ def _positive(value):
 def calculate(ingredients, portion):
     """Scale nutrients per reference quantity by quantity and fraction consumed.
 
-    Each ingredient is (amount, reference, nutrient_values), where amount and
-    reference are Measure values using the same unit and food state. None or
-    a missing nutrient means unknown. No conversion is performed.
-    Returns nutrient -> (known subtotal or None, complete).
+    Each ingredient is (amount, source); the source binds its reference basis,
+    values and citation. Review is a recorded human assertion, not proof.
+    Returns (nutrient totals, citations needing review). None means unknown.
     """
     if not _positive(portion) or portion > 1:
         raise ValueError('A nonempty recipe and portion in (0, 1] are required')
 
     totals = {name: None for name in NUTRIENTS}
     complete = {name: True for name in NUTRIENTS}
+    unreviewed = []
     found_ingredient = False
-    for amount, reference, values in ingredients:
+    for amount, source in ingredients:
         found_ingredient = True
+        if (not isinstance(source, NutrientSource) or not isinstance(source.citation, str)
+                or not source.citation.strip() or type(source.reviewed) is not bool
+                or not isinstance(source.values, MappingProxyType)):
+            raise ValueError('A source citation, nutrient values and review status are required')
+        reference, values = source.reference, source.values
+        if not source.reviewed:
+            unreviewed.append(source.citation)
         if not isinstance(amount, Measure) or not isinstance(reference, Measure):
             raise ValueError('Amount and reference must specify units and food state')
         if not _positive(amount.quantity) or not _positive(reference.quantity):
@@ -55,4 +76,4 @@ def calculate(ingredients, portion):
                 totals[name] = (totals[name] if totals[name] is not None else Decimal(0)) + contribution
     if not found_ingredient:
         raise ValueError('A nonempty recipe and portion in (0, 1] are required')
-    return {name: (totals[name], complete[name]) for name in NUTRIENTS}
+    return {name: (totals[name], complete[name]) for name in NUTRIENTS}, tuple(unreviewed)
