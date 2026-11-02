@@ -48,6 +48,26 @@ To run the API for local development only:
 
 The current `/health` route only confirms that the process responds. Do not bind to `0.0.0.0`, forward ports, or expose the API, Ollama, or database to a network. No authenticated patient routes or production setup have been implemented.
 
+## Run the experimental calculator on this PC
+
+This preview accepts invented sample numbers only. It does not save profiles or recipes, connect OCR to the screen, or support remote phone access. Do not enter real food labels or patient information.
+
+Complete the dependency setup above, then open two PowerShell windows in the repository folder. In the first:
+
+```powershell
+Set-Location C:\work\kidney_calc
+.\.venv\Scripts\python.exe -m uvicorn api.main:app --host 127.0.0.1 --port 8000
+```
+
+In the second:
+
+```powershell
+Set-Location C:\work\kidney_calc
+npm run dev --prefix web
+```
+
+Open the local address printed by Vite, usually `http://127.0.0.1:5173/`. Keep both windows open while testing; stop each with Ctrl+C. The frontend development server proxies the experimental calculator to the local API. If either port is occupied, stop and resolve the conflict rather than exposing the service to the network. This preview has not been tested on the target Windows PC.
+
 ## 3. Record Windows and GPU facts
 
 Run these commands in PowerShell and keep only the required version/model facts in the handoff. Do not include serial numbers, usernames, unrelated process output, or screenshots.
