@@ -20,13 +20,17 @@ afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+  window.history.replaceState(null, '', '/')
 })
+
+const openRecipes = () => fireEvent.click(screen.getByRole('link', { name: 'สูตรอาหาร' }))
 
 describe('manual recipe UI', () => {
   it('requires synthetic-only confirmation', () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
+    openRecipes()
     expect(screen.getByRole('checkbox', { name: /ยืนยันว่าข้อมูลทั้งหมด/ }).required).toBe(true)
     expect(screen.getByText(/ตัวเลขสมมติเท่านั้น/)).toBeTruthy()
     expect(screen.getByText(/ห้ามใช้ค่าจากฉลากอาหารจริงหรือข้อมูลผู้ป่วย/)).toBeTruthy()
@@ -49,6 +53,7 @@ describe('manual recipe UI', () => {
     const fetchMock = vi.fn(() => delayedResponse)
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
+    openRecipes()
 
     fireEvent.change(screen.getAllByLabelText(/ปริมาณที่ใช้/)[0], { target: { value: '100' } })
     fireEvent.click(screen.getByRole('checkbox', { name: /ยืนยันว่าข้อมูลทั้งหมด/ }))

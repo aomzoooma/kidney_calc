@@ -12,6 +12,13 @@ type SavedSeasoning = {
 }
 
 type SavedSeasoningResponse = { items: SavedSeasoning[] }
+type OcrSuggestions = {
+  basis_quantity: string | null
+  basis_unit: 'g' | 'ml' | null
+  nutrients: Record<NutrientKey, string | null>
+  basis_conflict: boolean
+  requires_human_review: true
+}
 type SeasoningForm = {
   name: string
   brand: string
@@ -25,6 +32,44 @@ const emptyForm = (): SeasoningForm => ({
   values: { energy_kcal: '', protein_g: '', sodium_mg: '', potassium_mg: '', phosphorus_mg: '' },
 })
 const uncertainSave = 'ยืนยันผลบันทึกไม่ได้ ตรวจรายการก่อนบันทึกซ้ำ'
+
+function isDecimalString(value: unknown, positive = false): value is string {
+  if (typeof value !== 'string' || !/^(?:\d+\.?\d*|\.\d+)$/.test(value)) return false
+  const number = Number(value)
+  return Number.isFinite(number) && (positive ? number > 0 : number >= 0)
+}
+
+function parseOcrSuggestions(value: unknown): OcrSuggestions | null {
+  if (!value || typeof value !== 'object') return null
+  const item = value as Record<string, unknown>
+  if (!(item.basis_quantity === null || isDecimalString(item.basis_quantity, true))
+    || !(item.basis_unit === null || item.basis_unit === 'g' || item.basis_unit === 'ml')
+    || typeof item.basis_conflict !== 'boolean' || item.requires_human_review !== true
+    || !item.nutrients || typeof item.nutrients !== 'object' || Array.isArray(item.nutrients)) return null
+  const values = item.nutrients as Record<string, unknown>
+  if (!nutrients.every(([key]) => Object.hasOwn(values, key) && (values[key] === null || isDecimalString(values[key])))) return null
+  return {
+    basis_quantity: item.basis_quantity as string | null,
+    basis_unit: item.basis_unit as 'g' | 'ml' | null,
+    nutrients: values as OcrSuggestions['nutrients'],
+    basis_conflict: item.basis_conflict,
+    requires_human_review: true,
+  }
+}
+
+function suggestionBlockReason(form: SeasoningForm, suggestions: OcrSuggestions): string | null {
+  if (suggestions.basis_conflict) return 'ฉลากมีค่าที่อ้างอิงคนละฐาน จึงไม่นำค่าจาก OCR มาเติม'
+  if (!suggestions.basis_quantity || !suggestions.basis_unit) return 'OCR จับคู่ปริมาณและหน่วยฐานไม่ครบ จึงยังเติมค่าไม่ได้'
+  const quantity = form.basisQuantity.trim()
+  const unit = form.basisUnit
+  if ((!quantity || !unit) && Object.values(form.values).some(value => value.trim() !== '')) {
+    return 'กรุณาระบุฐานของค่าที่กรอกไว้ก่อน จึงจะเติมค่าจาก OCR ได้'
+  }
+  if ((quantity || unit) && (!quantity || !unit || quantity !== suggestions.basis_quantity || unit !== suggestions.basis_unit)) {
+    return 'ฐานที่กรอกไม่ตรงกับฐานจาก OCR จึงไม่นำค่ามาผสมกัน'
+  }
+  return null
+}
 
 function isSavedSeasoning(value: unknown): value is SavedSeasoning {
   if (!value || typeof value !== 'object') return false
@@ -52,6 +97,9 @@ export function OcrPreview() {
   const [reviewed, setReviewed] = useState(false)
   const [preview, setPreview] = useState('')
   const [form, setForm] = useState<SeasoningForm>(emptyForm)
+  const [ocrSuggestions, setOcrSuggestions] = useState<OcrSuggestions | null>(null)
+  const [ocrSuggestionRevision, setOcrSuggestionRevision] = useState<number | null>(null)
+  const [suggestionStatus, setSuggestionStatus] = useState('')
   const [saved, setSaved] = useState<SavedSeasoning[]>([])
   const [listState, setListState] = useState<'loading' | 'ready' | 'unavailable'>('loading')
   const [saveMessage, setSaveMessage] = useState('')
@@ -63,12 +111,20 @@ export function OcrPreview() {
     formRevision.current++
     setForm(current => ({ ...current, ...changes }))
     setReviewed(false)
+    if (ocrSuggestions) {
+      setOcrSuggestionRevision(null)
+      setSuggestionStatus('มีการแก้ไขข้อมูลแล้ว ให้นำค่าจากภาพมาตรวจและกรอกเอง')
+    }
   }
 
   function updateNutrient(key: NutrientKey, value: string) {
     formRevision.current++
     setForm(current => ({ ...current, values: { ...current.values, [key]: value } }))
     setReviewed(false)
+    if (ocrSuggestions) {
+      setOcrSuggestionRevision(null)
+      setSuggestionStatus('มีการแก้ไขข้อมูลแล้ว ให้นำค่าจากภาพมาตรวจและกรอกเอง')
+    }
   }
 
   async function loadSaved(signal?: AbortSignal) {
@@ -100,7 +156,9 @@ export function OcrPreview() {
     event.preventDefault()
     if (!file || !confirmed) return
     const current = ++ocrRevision.current
+    const startingFormRevision = formRevision.current
     setText(''); setError(''); setSaveMessage(''); setBusy(true)
+    setOcrSuggestions(null); setOcrSuggestionRevision(null); setSuggestionStatus('')
     let controller: AbortController | null = null
     try {
       if (file.size > 8 * 1024 * 1024 || !['image/png', 'image/jpeg'].includes(file.type)) throw new Error('เลือกภาพ PNG หรือ JPEG ขนาดไม่เกิน 8 MB')
@@ -117,7 +175,16 @@ export function OcrPreview() {
       })
       const result: unknown = await response.json().catch(() => null)
       if (!response.ok || !result || typeof result !== 'object' || typeof (result as { text?: unknown }).text !== 'string') throw new Error('อ่านภาพไม่ได้ ตรวจว่า Ollama และโมเดลทำงานอยู่')
-      if (ocrRevision.current === current) setText((result as { text: string }).text)
+      if (ocrRevision.current === current) {
+        const payload = result as { text: string; requires_human_review?: unknown; suggestions?: unknown }
+        const parsedSuggestions = payload.requires_human_review === true ? parseOcrSuggestions(payload.suggestions) : null
+        setText(payload.text)
+        setOcrSuggestions(parsedSuggestions)
+        setOcrSuggestionRevision(startingFormRevision)
+        setSuggestionStatus(!parsedSuggestions ? 'OCR ยังไม่มีข้อเสนอที่ตรวจสอบได้ ต้องกรอกเทียบภาพเอง'
+          : formRevision.current !== startingFormRevision ? 'มีการแก้ไขระหว่าง OCR จึงไม่นำข้อเสนอมาเติม'
+            : suggestionBlockReason(form, parsedSuggestions) ?? 'ตรวจข้อเสนอและกดเติมช่องว่าง หากตรงกับฉลาก')
+      }
     } catch (cause) {
       if (ocrRevision.current === current && !(cause instanceof DOMException && cause.name === 'AbortError')) setError(cause instanceof Error && cause.message === 'Failed to fetch'
         ? 'เชื่อมต่อ OCR ไม่ได้ ตรวจว่า API และ Ollama ทำงานอยู่' : cause instanceof Error ? cause.message : 'อ่านภาพไม่ได้')
@@ -125,6 +192,27 @@ export function OcrPreview() {
       if (pending.current === controller) pending.current = null
       if (ocrRevision.current === current) setBusy(false)
     }
+  }
+
+  const suggestionReason = ocrSuggestions ? suggestionBlockReason(form, ocrSuggestions) : null
+  const canApplySuggestions = !!ocrSuggestions && !suggestionReason
+    && ocrSuggestionRevision !== null && ocrSuggestionRevision === formRevision.current
+
+  function applyOcrSuggestions() {
+    if (!ocrSuggestions || !canApplySuggestions) return
+    const next: SeasoningForm = { ...form, values: { ...form.values } }
+    let filled = 0
+    if (!next.basisQuantity.trim() && ocrSuggestions.basis_quantity) { next.basisQuantity = ocrSuggestions.basis_quantity; filled++ }
+    if (!next.basisUnit && ocrSuggestions.basis_unit) { next.basisUnit = ocrSuggestions.basis_unit; filled++ }
+    for (const [key] of nutrients) {
+      const suggestion = ocrSuggestions.nutrients[key]
+      if (!next.values[key].trim() && suggestion !== null) { next.values[key] = suggestion; filled++ }
+    }
+    formRevision.current++
+    setForm(next)
+    setReviewed(false)
+    setOcrSuggestionRevision(null)
+    setSuggestionStatus(filled ? 'เติมเฉพาะช่องว่างแล้ว กรุณาตรวจทุกค่ากับภาพอีกครั้ง' : 'ไม่มีช่องว่างให้เติม')
   }
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
@@ -191,7 +279,7 @@ export function OcrPreview() {
     <form className="capture-form" onSubmit={submit}>
       <label>ถ่ายหรือเลือกภาพฉลากทดสอบ
         <input type="file" accept="image/png,image/jpeg" capture="environment" required disabled={saving} onChange={event => {
-          ocrRevision.current++; formRevision.current++; pending.current?.abort(); setBusy(false); setConfirmed(false); setFile(event.target.files?.[0] ?? null); setText(''); setForm(emptyForm()); setReviewed(false); setSaveMessage(''); setError('')
+          ocrRevision.current++; formRevision.current++; pending.current?.abort(); setBusy(false); setConfirmed(false); setFile(event.target.files?.[0] ?? null); setText(''); setForm(emptyForm()); setReviewed(false); setOcrSuggestions(null); setOcrSuggestionRevision(null); setSuggestionStatus(''); setSaveMessage(''); setError('')
         }} />
       </label>
       <label className="attestation"><input type="checkbox" required checked={confirmed} disabled={saving} onChange={event => setConfirmed(event.target.checked)} /> ยืนยันว่าเป็นภาพทดสอบ ไม่มีข้อมูลผู้ป่วยหรือข้อมูลส่วนบุคคล</label>
@@ -199,7 +287,10 @@ export function OcrPreview() {
     </form>
     {preview && <div className="label-review">
       <figure><img src={preview} alt="ภาพฉลากทดสอบที่เลือก" /><figcaption>เทียบข้อมูลกับภาพนี้ก่อนบันทึกทุกครั้ง</figcaption></figure>
-      <div className="ocr-text" aria-live="polite"><h3>ข้อความจาก OCR</h3><p>OCR อาจอ่านผิดหรือสร้างข้อความเพิ่ม ระบบยังไม่เติมค่าลงช่องอัตโนมัติระหว่างตรวจสอบการจับคู่ข้อมูล</p>{text ? <pre>{text}</pre> : <p className="muted">ผลอ่านข้อความจะแสดงตรงนี้</p>}</div>
+      <div className="ocr-text" aria-live="polite"><h3>ข้อความจาก OCR</h3><p>OCR อาจอ่านผิดหรือสร้างข้อความเพิ่ม ตรวจภาพก่อนใช้ข้อเสนอทุกครั้ง</p>{text ? <pre>{text}</pre> : <p className="muted">ผลอ่านข้อความจะแสดงตรงนี้</p>}
+        {ocrSuggestions && <button type="button" className="add-button" disabled={busy || saving || !canApplySuggestions} onClick={applyOcrSuggestions}>เติมช่องว่างจาก OCR</button>}
+        {suggestionStatus && <p className={ocrSuggestions?.basis_conflict ? 'error' : 'muted'} role="status">{suggestionStatus}</p>}
+      </div>
     </div>}
     {file && <form className="seasoning-review" onSubmit={save}>
       <h3>กรอกค่าที่ตรวจเทียบแล้ว</h3>

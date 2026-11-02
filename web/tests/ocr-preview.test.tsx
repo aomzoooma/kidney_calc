@@ -25,8 +25,60 @@ it('shows untrusted OCR text beside image and does not autofill fields', async (
   expect(screen.getByAltText('ภาพฉลากทดสอบที่เลือก')).toBeTruthy()
   expect(screen.getByText('โซเดียม 100 มก.')).toBeTruthy()
   expect(screen.getByLabelText('ชื่อเครื่องปรุง')).toHaveProperty('value', '')
-  expect(screen.getByText(/ยังไม่เติมค่าลงช่องอัตโนมัติ/)).toBeTruthy()
+  expect(screen.getByText(/OCR ยังไม่มีข้อเสนอที่ตรวจสอบได้/)).toBeTruthy()
   expect(fetchMock).toHaveBeenCalledWith('/experimental/ocr', expect.objectContaining({ method: 'POST' }))
+})
+
+it('fills only blank fields after an explicit action and resets review', async () => {
+  vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:test'), revokeObjectURL: vi.fn() })
+  const suggestions = {
+    basis_quantity: '100', basis_unit: 'g', basis_conflict: false, requires_human_review: true,
+    nutrients: { energy_kcal: '12', protein_g: null, sodium_mg: '40', potassium_mg: null, phosphorus_mg: '0' },
+  }
+  const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+    if (url === '/experimental/ocr') return { ok: true, json: async () => ({ text: 'ข้อความจากฉลาก', suggestions, requires_human_review: true }) }
+    if (options?.method === 'POST') return { ok: true, json: async () => ({ ingredient_id: 8, version_id: 14 }) }
+    return { ok: true, json: async () => ({ items: [] }) }
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<OcrPreview />)
+  chooseTestImage()
+  fireEvent.click(screen.getByRole('checkbox', { name: /ภาพทดสอบ/ }))
+  fireEvent.change(screen.getByLabelText('ชื่อเครื่องปรุง'), { target: { value: 'ชื่อกรอกเอง' } })
+  fireEvent.change(screen.getByLabelText('ข้อมูลต่อปริมาณ'), { target: { value: '100' } })
+  fireEvent.change(screen.getByLabelText('หน่วยฐาน'), { target: { value: 'g' } })
+  fireEvent.change(screen.getByLabelText(/โซเดียม/), { target: { value: '500' } })
+  await act(async () => { fireEvent.submit(screen.getByRole('button', { name: 'อ่านข้อความจากภาพ' }).closest('form')!) })
+  expect(screen.getByLabelText('ชื่อเครื่องปรุง')).toHaveProperty('value', 'ชื่อกรอกเอง')
+  expect(screen.getByLabelText('ข้อมูลต่อปริมาณ')).toHaveProperty('value', '100')
+  expect(screen.getByLabelText(/โซเดียม/)).toHaveProperty('value', '500')
+  const apply = screen.getByRole('button', { name: 'เติมช่องว่างจาก OCR' })
+  expect((apply as HTMLButtonElement).disabled).toBe(false)
+  fireEvent.click(apply)
+  expect(screen.getByLabelText('ข้อมูลต่อปริมาณ')).toHaveProperty('value', '100')
+  expect(screen.getByLabelText('หน่วยฐาน')).toHaveProperty('value', 'g')
+  expect(screen.getByLabelText(/พลังงาน/)).toHaveProperty('value', '12')
+  expect(screen.getByLabelText(/โซเดียม/)).toHaveProperty('value', '500')
+  expect(screen.getByLabelText(/ฟอสฟอรัส/)).toHaveProperty('value', '0')
+  expect((screen.getByRole('checkbox', { name: /ตรวจชื่อ/ }) as HTMLInputElement).checked).toBe(false)
+  expect((screen.getByRole('button', { name: 'บันทึกเครื่องปรุงทดลอง' }) as HTMLButtonElement).disabled).toBe(true)
+})
+
+it('does not attach an OCR basis to manually entered nutrients with no basis', async () => {
+  vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:test'), revokeObjectURL: vi.fn() })
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => url === '/experimental/ocr'
+    ? { ok: true, json: async () => ({ text: 'test', requires_human_review: true, suggestions: {
+      basis_quantity: '100', basis_unit: 'g', basis_conflict: false, requires_human_review: true,
+      nutrients: { energy_kcal: '12', protein_g: null, sodium_mg: '40', potassium_mg: null, phosphorus_mg: null },
+    } }) }
+    : { ok: true, json: async () => ({ items: [] }) }))
+  render(<OcrPreview />)
+  chooseTestImage()
+  fireEvent.click(screen.getByRole('checkbox', { name: /ภาพทดสอบ/ }))
+  fireEvent.change(screen.getByLabelText(/โซเดียม/), { target: { value: '500' } })
+  await act(async () => { fireEvent.submit(screen.getByRole('button', { name: 'อ่านข้อความจากภาพ' }).closest('form')!) })
+  expect((screen.getByRole('button', { name: 'เติมช่องว่างจาก OCR' }) as HTMLButtonElement).disabled).toBe(true)
+  expect(screen.getByLabelText('ข้อมูลต่อปริมาณ')).toHaveProperty('value', '')
 })
 
 it('saves only reviewed user-entered values and keeps unknown nutrients null', async () => {
@@ -125,8 +177,12 @@ it('keeps OCR loading independent from edits and allows reviewed save after slow
   fireEvent.change(screen.getByLabelText('หน่วยฐาน'), { target: { value: 'g' } })
   fireEvent.click(screen.getByRole('checkbox', { name: /ตรวจชื่อ/ }))
   expect((screen.getByRole('button', { name: /รอ OCR เสร็จ/ }) as HTMLButtonElement).disabled).toBe(true)
-  await act(async () => { finishOcr({ ok: true, json: async () => ({ text: 'ผล OCR ทดสอบ' }) }) })
+  await act(async () => { finishOcr({ ok: true, json: async () => ({ text: 'ผล OCR ทดสอบ', requires_human_review: true, suggestions: { basis_quantity: '75', basis_unit: 'g', basis_conflict: false, requires_human_review: true, nutrients: { energy_kcal: '10', protein_g: null, sodium_mg: '300', potassium_mg: null, phosphorus_mg: null } } }) }) })
   expect(screen.getByLabelText('ชื่อเครื่องปรุง')).toHaveProperty('value', 'ซอสช้า')
+  expect(screen.getByLabelText('ข้อมูลต่อปริมาณ')).toHaveProperty('value', '100')
+  expect(screen.getByLabelText(/โซเดียม/)).toHaveProperty('value', '')
+  expect((screen.getByRole('button', { name: 'เติมช่องว่างจาก OCR' }) as HTMLButtonElement).disabled).toBe(true)
+  expect(screen.getByText(/มีการแก้ไขระหว่าง OCR/)).toBeTruthy()
   expect(screen.getByText('ผล OCR ทดสอบ')).toBeTruthy()
   expect((screen.getByRole('button', { name: 'บันทึกเครื่องปรุงทดลอง' }) as HTMLButtonElement).disabled).toBe(false)
   await act(async () => { fireEvent.submit(screen.getByRole('button', { name: 'บันทึกเครื่องปรุงทดลอง' }).closest('form')!) })
@@ -149,6 +205,45 @@ it('preserves manual values when OCR is retried for the same image', async () =>
   expect(screen.getByLabelText('ชื่อเครื่องปรุง')).toHaveProperty('value', 'กรอกไว้แล้ว')
   expect(screen.getByLabelText('ข้อมูลต่อปริมาณ')).toHaveProperty('value', '30')
   expect(fetchMock.mock.calls.filter(([url]) => url === '/experimental/ocr')).toHaveLength(2)
+})
+
+it.each([
+  {
+    name: 'mixed bases',
+    suggestion: { basis_quantity: null, basis_unit: null, basis_conflict: true, requires_human_review: true, nutrients: { energy_kcal: null, protein_g: null, sodium_mg: null, potassium_mg: null, phosphorus_mg: null } },
+    manualBasis: null,
+    reason: /คนละฐาน/,
+  },
+  {
+    name: 'missing basis unit',
+    suggestion: { basis_quantity: '100', basis_unit: null, basis_conflict: false, requires_human_review: true, nutrients: { energy_kcal: null, protein_g: null, sodium_mg: '30', potassium_mg: null, phosphorus_mg: null } },
+    manualBasis: null,
+    reason: /จับคู่ปริมาณและหน่วยฐานไม่ครบ/,
+  },
+  {
+    name: 'mismatched manual basis',
+    suggestion: { basis_quantity: '100', basis_unit: 'g', basis_conflict: false, requires_human_review: true, nutrients: { energy_kcal: null, protein_g: null, sodium_mg: '30', potassium_mg: null, phosphorus_mg: null } },
+    manualBasis: { quantity: '50', unit: 'g' },
+    reason: /ฐานที่กรอกไม่ตรง/,
+  },
+])('withholds OCR fill for $name', async ({ suggestion, manualBasis, reason }) => {
+  vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:test'), revokeObjectURL: vi.fn() })
+  const fetchMock = vi.fn(async (url: string) => url === '/experimental/ocr'
+    ? { ok: true, json: async () => ({ text: 'ฉลากที่ยังจับคู่ฐานไม่ได้', requires_human_review: true, suggestions: suggestion }) }
+    : { ok: true, json: async () => ({ items: [] }) })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<OcrPreview />)
+  chooseTestImage()
+  fireEvent.click(screen.getByRole('checkbox', { name: /ภาพทดสอบ/ }))
+  if (manualBasis) {
+    fireEvent.change(screen.getByLabelText('ข้อมูลต่อปริมาณ'), { target: { value: manualBasis.quantity } })
+    fireEvent.change(screen.getByLabelText('หน่วยฐาน'), { target: { value: manualBasis.unit } })
+  }
+  await act(async () => { fireEvent.submit(screen.getByRole('button', { name: 'อ่านข้อความจากภาพ' }).closest('form')!) })
+  expect((screen.getByRole('button', { name: 'เติมช่องว่างจาก OCR' }) as HTMLButtonElement).disabled).toBe(true)
+  expect(screen.getByText(reason)).toBeTruthy()
+  expect(screen.getByLabelText(/โซเดียม/)).toHaveProperty('value', '')
+  if (manualBasis) expect(screen.getByLabelText('ข้อมูลต่อปริมาณ')).toHaveProperty('value', manualBasis.quantity)
 })
 
 it('refreshes the saved list after an ambiguous network failure', async () => {
