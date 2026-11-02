@@ -68,6 +68,87 @@ class SeasoningApiTest(unittest.TestCase):
         recipe['ingredients'] = [{**base, 'unit': 'g'}]
         self.assertEqual(self.client.post('/experimental/recipes/calculate', json=recipe).status_code, 422)
 
+    def test_persisted_recipe_reuses_exact_reviewed_seasoning_with_metadata_and_unknowns(self):
+        seasoning = self.client.post('/experimental/seasonings', json={
+            **self.payload, 'name': 'Mom chili paste', 'brand': 'Mom brand',
+            'nutrients': {'sodium_mg': '120', 'protein_g': None},
+        }).json()
+        recipe = self.client.post('/experimental/recipes', json={
+            'synthetic_only': True, 'name': 'Synthetic meal', 'ingredients': [{
+                'seasoning_version_id': seasoning['version_id'],
+                'amount': '7.5', 'unit': 'ml', 'food_state': 'as_sold',
+            }],
+        })
+        self.assertEqual(recipe.status_code, 200, recipe.text)
+        recipe_id = recipe.json()['id']
+        loaded = self.client.get(f'/experimental/recipes/{recipe_id}')
+        self.assertEqual(loaded.status_code, 200)
+        ingredient, = loaded.json()['ingredients']
+        self.assertEqual(ingredient['ingredient_version_id'], seasoning['version_id'])
+        self.assertEqual(ingredient['seasoning_version_id'], seasoning['version_id'])
+        self.assertEqual(ingredient['ingredient_name'], 'Mom chili paste')
+        self.assertEqual(ingredient['brand'], 'Mom brand')
+        self.assertEqual((ingredient['basis_quantity'], ingredient['basis_unit']), ('15', 'ml'))
+        self.assertEqual((ingredient['amount'], ingredient['unit'], ingredient['food_state']),
+                         ('7.5', 'ml', 'as_sold'))
+        self.assertTrue(ingredient['reviewed'])
+        self.assertEqual(ingredient['provider'], 'Mom brand')
+        self.assertEqual(ingredient['provenance'], 'user-entered label')
+        self.assertEqual(ingredient['source_reference'], 'synthetic test label')
+        self.assertEqual(ingredient['sodium_mg'], '120')
+        self.assertIsNone(ingredient['protein_g'])
+
+        calculated = self.client.post(f'/experimental/recipes/{recipe_id}/calculate', json={
+            'synthetic_only': True, 'portion': '1',
+        })
+        self.assertEqual(calculated.status_code, 200)
+        self.assertEqual(calculated.json()['totals']['sodium_mg'], {'value': '60.0', 'complete': True})
+        self.assertEqual(calculated.json()['totals']['protein_g'], {'value': None, 'complete': False})
+
+        with sqlite3.connect(Path(self.tmp.name) / 'demo.db') as db:
+            self.assertEqual(db.execute(
+                'SELECT COUNT(*) FROM ingredient_versions WHERE id = ?',
+                (seasoning['version_id'],),
+            ).fetchone()[0], 1)
+
+    def test_persisted_recipe_rejects_unreviewed_or_mismatched_seasoning_without_write(self):
+        seasoning = self.client.post('/experimental/seasonings', json=self.payload).json()
+        base = {'seasoning_version_id': seasoning['version_id'], 'amount': '7.5',
+                'unit': 'ml', 'food_state': 'as_sold'}
+        for ingredient in (
+            {**base, 'unit': 'g'},
+            {**base, 'food_state': 'cooked'},
+            {**base, 'seasoning_version_id': 999999},
+            {**base, 'patient_id': 'synthetic-only-not-accepted'},
+            {**base, 'nutrients': {'sodium_mg': '999'}},
+            {**base, 'ingredient_version_id': seasoning['version_id']},
+        ):
+            response = self.client.post('/experimental/recipes', json={
+                'synthetic_only': True, 'name': 'Invalid meal', 'ingredients': [ingredient],
+            })
+            self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(self.client.get('/experimental/recipes').json()['items'], [])
+
+    def test_recipe_output_for_existing_ingredient_has_no_seasoning_brand_or_alias(self):
+        ingredient = self.client.post('/experimental/ingredients', json={
+            'synthetic_only': True, 'reviewed': True, 'name': 'Synthetic rice',
+            'provider': 'Synthetic source', 'source_version': 'fixture-v1',
+            'source_reference': 'synthetic reference', 'provenance': 'synthetic fixture',
+            'basis_quantity': '100', 'basis_unit': 'g', 'food_state': 'cooked',
+            'nutrients': {'sodium_mg': None},
+        }).json()
+        recipe = self.client.post('/experimental/recipes', json={
+            'synthetic_only': True, 'name': 'Rice', 'ingredients': [{
+                'ingredient_version_id': ingredient['version_id'],
+                'amount': '25', 'unit': 'g', 'food_state': 'cooked',
+            }],
+        })
+        self.assertEqual(recipe.status_code, 200, recipe.text)
+        row, = self.client.get(f"/experimental/recipes/{recipe.json()['id']}").json()['ingredients']
+        self.assertIsNone(row['seasoning_version_id'])
+        self.assertIsNone(row['brand'])
+        self.assertEqual(row['provenance'], 'synthetic fixture')
+
     def test_rejects_unreviewed_real_or_invalid_data(self):
         for change in ({'reviewed': False}, {'synthetic_only': False}, {'basis_quantity': '0'}):
             self.assertEqual(self.client.post('/experimental/seasonings', json={**self.payload, **change}).status_code, 422)

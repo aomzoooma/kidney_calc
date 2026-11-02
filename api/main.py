@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictBool, StrictInt, ValidationError
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictBool, StrictInt, ValidationError, model_validator
 
 from nutrition.calculator import NUTRIENTS, Measure, NutrientSource, calculate
 from nutrition.label_parser import parse_nutrition_label
@@ -82,10 +82,17 @@ class RecipeInput(BaseModel):
 class SavedRecipeIngredientInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    ingredient_version_id: Annotated[StrictInt, Field(gt=0)]
+    ingredient_version_id: Optional[Annotated[StrictInt, Field(gt=0)]] = None
+    seasoning_version_id: Optional[Annotated[StrictInt, Field(gt=0)]] = None
     amount: Positive
     unit: Literal["g", "ml"]
     food_state: Literal["raw", "cooked", "as_sold"]
+
+    @model_validator(mode="after")
+    def require_one_reviewed_source(self):
+        if (self.ingredient_version_id is None) == (self.seasoning_version_id is None):
+            raise ValueError("Provide exactly one ingredient or seasoning version ID")
+        return self
 
 
 class SavedRecipeInput(BaseModel):
@@ -264,12 +271,18 @@ def _recipe_response(recipe):
 
 
 def _recipe_entries(items):
-    ingredients = _demo_store().ingredients
+    store = _demo_store()
     entries = []
     for item in items:
-        if ingredients.get_reviewed_version(item.ingredient_version_id) is None:
+        if item.seasoning_version_id is not None:
+            version_id = item.seasoning_version_id
+            source = store.get_reviewed_version(version_id)
+        else:
+            version_id = item.ingredient_version_id
+            source = store.ingredients.get_reviewed_version(version_id)
+        if source is None:
             raise ValueError("Recipe ingredients must use locally reviewed source versions")
-        entries.append((item.ingredient_version_id, item.amount, item.unit, item.food_state))
+        entries.append((version_id, item.amount, item.unit, item.food_state))
     return entries
 
 

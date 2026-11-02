@@ -174,21 +174,33 @@ class RecipeStore:
             ).fetchone()
             if recipe is None:
                 return None
+            has_seasoning_brands = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'seasoning_brands'"
+            ).fetchone() is not None
+            seasoning_columns = ("b.brand AS brand, b.ingredient_id AS seasoning_identity,"
+                                 if has_seasoning_brands else "NULL AS brand, NULL AS seasoning_identity,")
+            seasoning_join = ("LEFT JOIN seasoning_brands b ON b.ingredient_id = i.id"
+                              if has_seasoning_brands else "")
             rows = db.execute(
                 """SELECT ri.position, ri.ingredient_version_id, ri.amount, ri.unit, ri.food_state,
-                          i.name AS ingredient_name, v.version, v.provider, v.source_version,
+                          i.name AS ingredient_name, """ + seasoning_columns + """ v.version, v.provider, v.source_version,
                           v.source_date, v.retrieved_on, v.source_reference, v.provenance,
                           v.basis_quantity, v.basis_unit, v.food_state AS source_food_state,
                           v.reviewed, """ + ", ".join(f'v."{key}"' for key in NUTRIENTS) + """
                    FROM recipe_ingredients ri
                    JOIN ingredient_versions v ON v.id = ri.ingredient_version_id
                    JOIN ingredients i ON i.id = v.ingredient_id
+                   """ + seasoning_join + """
                    WHERE ri.recipe_id = ? ORDER BY ri.position""",
                 (recipe_id,),
             ).fetchall()
             ingredients = []
             for row in rows:
                 item = dict(row)
+                item["seasoning_version_id"] = (
+                    item["ingredient_version_id"] if item["seasoning_identity"] is not None else None
+                )
+                del item["seasoning_identity"]
                 item["amount"] = Decimal(item["amount"])
                 item["basis_quantity"] = Decimal(item["basis_quantity"])
                 item["reviewed"] = bool(item["reviewed"])
