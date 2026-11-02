@@ -5,15 +5,23 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import os
+import sqlite3
+import tempfile
+from datetime import datetime
 from decimal import Decimal, DecimalException, InvalidOperation
+from pathlib import Path
 from typing import Annotated, Literal, Optional
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, ValidationError
 
 from nutrition.calculator import NUTRIENTS, Measure, NutrientSource, calculate
+from nutrition.label_parser import parse_nutrition_label
+from nutrition.seasonings import SeasoningStore
 from api.ocr import MAX_IMAGE_BYTES, OCRServiceError, ocr_image
 
 
@@ -67,6 +75,74 @@ class OCRInput(BaseModel):
     synthetic_only: Literal[True]
     content_type: Literal["image/png", "image/jpeg"]
     image_base64: str = Field(min_length=1, max_length=4 * ((MAX_IMAGE_BYTES + 2) // 3))
+
+
+class SeasoningNutrients(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    energy_kcal: Optional[Number] = None
+    protein_g: Optional[Number] = None
+    sodium_mg: Optional[Number] = None
+    potassium_mg: Optional[Number] = None
+    phosphorus_mg: Optional[Number] = None
+
+
+class SeasoningInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    synthetic_only: Literal[True]
+    reviewed: Literal[True]
+    name: str = Field(min_length=1, max_length=150)
+    brand: Optional[str] = Field(default=None, max_length=150)
+    basis_quantity: Positive
+    basis_unit: Literal['g', 'ml']
+    nutrients: SeasoningNutrients
+
+
+def _demo_store():
+    path = os.environ.get('KIDNEY_EXPERIMENTAL_DB')
+    if not path:
+        raise HTTPException(status_code=503, detail='Experimental storage is not configured')
+    target = Path(path)
+    if target.is_symlink():
+        raise HTTPException(status_code=503, detail='Experimental storage is invalid')
+    try:
+        if not target.exists():
+            descriptor, temporary = tempfile.mkstemp(prefix='.kidney-demo-', dir=str(target.parent))
+            os.close(descriptor)
+            try:
+                with sqlite3.connect(temporary) as db:
+                    db.execute('CREATE TABLE experimental_demo_marker (marker TEXT NOT NULL)')
+                    db.execute("INSERT INTO experimental_demo_marker VALUES ('synthetic-only-v1')")
+                try:
+                    os.link(temporary, str(target))
+                except FileExistsError:
+                    pass
+            finally:
+                os.unlink(temporary)
+        with sqlite3.connect(f'{target.resolve().as_uri()}?mode=ro', uri=True) as db:
+            marker = db.execute('SELECT marker FROM experimental_demo_marker').fetchall()
+        if marker != [('synthetic-only-v1',)]:
+            raise ValueError('not an experimental database')
+        return SeasoningStore(target)
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        raise HTTPException(status_code=503, detail='Experimental storage is invalid or unavailable') from exc
+
+
+def _suggestions(text):
+    parsed = parse_nutrition_label(text)
+    serving = parsed.serving_basis
+    valid = [entry for entry in parsed.nutrients.values() if entry.value is not None]
+    bases = {entry.basis for entry in valid}
+    conflict = parsed.basis_conflict or len(bases) > 1
+    candidate = valid[0].basis if valid and not conflict else None
+    if candidate and candidate.unit == 'serving':
+        basis = serving if serving and serving.unit in ('g', 'ml') else None
+    else:
+        basis = candidate if candidate and candidate.unit in ('g', 'ml') else None
+    values = {name: (str(entry.value) if basis and entry.value is not None and entry.basis == candidate else None)
+              for name, entry in parsed.nutrients.items()}
+    return {'basis_quantity': str(basis.value) if basis else None,
+            'basis_unit': basis.unit if basis else None, 'nutrients': values,
+            'basis_conflict': conflict, 'requires_human_review': True}
 
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
@@ -126,7 +202,34 @@ async def experimental_ocr(request: Request):
         result = await ocr_image(image, payload.content_type)
     except (ValueError, UnicodeDecodeError, ValidationError, binascii.Error, OCRServiceError) as exc:
         raise HTTPException(status_code=422, detail="Image or local OCR request could not be processed") from exc
-    return {"text": result.text, "requires_human_review": True, "clinical_use": False}
+    return {"text": result.text, "suggestions": _suggestions(result.text),
+            "requires_human_review": True, "clinical_use": False}
+
+
+@app.get('/experimental/seasonings')
+def list_seasonings():
+    return {'items': _demo_store().list()}
+
+
+@app.post('/experimental/seasonings')
+async def save_seasoning(request: Request):
+    if request.headers.get('content-type', '').split(';', 1)[0].strip().lower() != 'application/json':
+        raise HTTPException(status_code=415, detail='JSON content type required')
+    try:
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > 32768:
+                raise HTTPException(status_code=413, detail='Request too large')
+        payload = SeasoningInput.model_validate(json.loads(body))
+        return _demo_store().create_reviewed(
+            name=payload.name, brand=payload.brand, basis_quantity=payload.basis_quantity,
+            basis_unit=payload.basis_unit, nutrients=payload.nutrients.model_dump(), reviewed=True,
+            retrieved_on=datetime.now(ZoneInfo('Asia/Bangkok')).date().isoformat(),
+            source_reference='synthetic test label',
+        )
+    except (ValueError, DecimalException, UnicodeDecodeError, ValidationError) as exc:
+        raise HTTPException(status_code=422, detail='Invalid seasoning data') from exc
 
 
 @app.post("/experimental/recipes/calculate")
