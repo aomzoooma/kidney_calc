@@ -7,6 +7,8 @@ type Profile = {
   goals: Array<{ nutrient: string; amount: number; unit: string; effective_on: string }>
 }
 type ProfileSummary = Pick<Profile, 'id' | 'name'>
+const emptyGoal = () => ({ nutrient: '', amount: '', unit: '', effective_on: '' })
+const emptyWeight = () => ({ measured_on: '', kilograms: '' })
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options)
@@ -23,8 +25,8 @@ export function ProfileManager() {
   const [profiles, setProfiles] = useState<ProfileSummary[]>([])
   const [profile, setProfile] = useState<Profile | null>(null)
   const [name, setName] = useState('')
-  const [goal, setGoal] = useState({ nutrient: '', amount: '', unit: '', effective_on: '' })
-  const [weight, setWeight] = useState({ measured_on: '', kilograms: '' })
+  const [goal, setGoal] = useState(emptyGoal)
+  const [weight, setWeight] = useState(emptyWeight)
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -86,7 +88,7 @@ export function ProfileManager() {
         selectedProfileId.current = created.id
         setProfiles(current => [created, ...current.filter(item => item.id !== created.id)])
         setProfile({ ...created, dry_weights: [], goals: [] })
-        setLoading(false); setName('')
+        setLoading(false); setName(''); setGoal(emptyGoal()); setWeight(emptyWeight())
       }, 'สร้างโปรไฟล์แล้ว')}>
         <label>ชื่อเรียกข้อมูลสมมติ <input required maxLength={80} value={name} onChange={event => setName(event.target.value)} autoComplete="off" /></label>
         <button className="submit-button" disabled={busy}>{busy ? 'กำลังบันทึก…' : 'สร้างโปรไฟล์สมมติ'}</button>
@@ -99,7 +101,8 @@ export function ProfileManager() {
         ? <p className="profile-empty" role="status">กำลังโหลดโปรไฟล์…</p>
         : <p className="profile-empty">ยังไม่มีโปรไฟล์สมมติ · สร้างโปรไฟล์ด้านบนเพื่อเริ่มบันทึก</p> : <>
         <label>เลือกโปรไฟล์ <select disabled={busy || loading} value={profile?.id ?? selectedProfileId.current ?? ''} onChange={event => {
-          const id = Number(event.target.value); setError(''); setProfile(null)
+          const id = Number(event.target.value); setError(''); setStatus(''); setProfile(null)
+          setGoal(emptyGoal()); setWeight(emptyWeight())
           loadProfile(id).catch(() => setError('เปิดโปรไฟล์ไม่ได้ ลองเลือกอีกครั้ง'))
         }}>
           {profiles.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
@@ -123,7 +126,7 @@ export function ProfileManager() {
               nutrient: goal.nutrient, amount: Number(goal.amount), unit: goal.unit, effective_on: goal.effective_on,
             }],
           } : current)
-          setGoal({ nutrient: '', amount: '', unit: '', effective_on: '' })
+          setGoal(emptyGoal())
         }, 'บันทึกเป้าหมายแล้ว')}>
           <label>สารอาหารตามเอกสารที่ได้รับ <input required maxLength={80} value={goal.nutrient} onChange={event => setGoal({ ...goal, nutrient: event.target.value })} /></label>
           <div className="field-grid">
@@ -149,7 +152,7 @@ export function ProfileManager() {
               measured_on: weight.measured_on, kilograms: Number(weight.kilograms),
             }],
           } : current)
-          setWeight({ measured_on: '', kilograms: '' })
+          setWeight(emptyWeight())
         }, 'บันทึกน้ำหนักแล้ว')}>
           <div className="field-grid">
             <label>น้ำหนักแห้ง (กก.) <input required type="number" min="0.01" step="any" inputMode="decimal" value={weight.kilograms} onChange={event => setWeight({ ...weight, kilograms: event.target.value })} /></label>

@@ -122,3 +122,30 @@ it('locks profile switching while a write is pending and keeps the saved profile
   expect(selector.value).toBe('2')
   expect(screen.queryByText('62.5 กก.')).toBeNull()
 })
+
+it('clears unsaved goal, weight and date drafts when switching profiles', async () => {
+  const profile = (id: number, name: string) => ({ id, name, dry_weights: [], goals: [] })
+  const fetchMock = vi.fn(async (url: string) => {
+    if (url === '/experimental/profiles') return { ok: true, json: async () => ({ items: [profile(1, 'ตัวอย่าง A'), profile(2, 'ตัวอย่าง B')] }) }
+    if (url === '/experimental/profiles/1') return { ok: true, json: async () => profile(1, 'ตัวอย่าง A') }
+    if (url === '/experimental/profiles/2') return { ok: true, json: async () => profile(2, 'ตัวอย่าง B') }
+    throw new Error(`Unexpected request: ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<App />)
+  fireEvent.click(screen.getByRole('link', { name: 'ผู้ป่วย' }))
+  const selector = await screen.findByLabelText('เลือกโปรไฟล์') as HTMLSelectElement
+  await screen.findByLabelText('น้ำหนักแห้ง (กก.)')
+  fireEvent.change(screen.getByLabelText('สารอาหารตามเอกสารที่ได้รับ'), { target: { value: 'โซเดียม' } })
+  fireEvent.change(screen.getByLabelText('ค่าเป้าหมาย'), { target: { value: '1800' } })
+  fireEvent.change(screen.getByLabelText('หน่วยตามเอกสาร'), { target: { value: 'มก./วัน' } })
+  fireEvent.change(screen.getByLabelText('วันที่เริ่มใช้'), { target: { value: '2026-11-01' } })
+  fireEvent.change(screen.getByLabelText('น้ำหนักแห้ง (กก.)'), { target: { value: '62.5' } })
+  fireEvent.change(screen.getByLabelText('วันที่วัด'), { target: { value: '2026-11-02' } })
+
+  fireEvent.change(selector, { target: { value: '2' } })
+  await screen.findByLabelText('น้ำหนักแห้ง (กก.)')
+  expect(selector.value).toBe('2')
+  for (const label of ['สารอาหารตามเอกสารที่ได้รับ', 'ค่าเป้าหมาย', 'หน่วยตามเอกสาร', 'วันที่เริ่มใช้', 'น้ำหนักแห้ง (กก.)', 'วันที่วัด'])
+    expect((screen.getByLabelText(label) as HTMLInputElement).value).toBe('')
+})
