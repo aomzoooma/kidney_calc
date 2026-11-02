@@ -302,4 +302,59 @@ describe('manual recipe UI', () => {
     await act(async () => { releaseSearch({ ok: true, json: async () => ({ items: [staleItem] }) }); await delayedSearch })
     expect(screen.queryByText('ผลเก่า')).toBeNull()
   })
+
+  it('clears previous USDA results and ignores an older delayed result after the query changes', async () => {
+    let resolveStale!: (value: { ok: boolean; json: () => Promise<{ items: object[] }> }) => void
+    const staleSearch = new Promise<{ ok: boolean; json: () => Promise<{ items: object[] }> }>(resolve => { resolveStale = resolve })
+    const item = (fdc_id: number, description: string) => ({ fdc_id, description, source_type: 'Foundation', source_version: 'synthetic', food_state: 'cooked' })
+    const fetchMock = vi.fn((url: string) => {
+      if (url.startsWith('/experimental/usda/search')) {
+        const query = new URL(url, window.location.origin).searchParams.get('q')
+        if (query === 'first') return Promise.resolve({ ok: true, json: async () => ({ items: [item(91, 'Previous synthetic result')] }) })
+        if (query === 'stale') return staleSearch
+        if (query === 'fresh') return Promise.resolve({ ok: true, json: async () => ({ items: [item(93, 'Current synthetic result')] }) })
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    const query = screen.getByLabelText('ชื่ออาหารภาษาอังกฤษ')
+    const search = () => fireEvent.click(screen.getByRole('button', { name: 'ค้นหา USDA' }))
+
+    fireEvent.change(query, { target: { value: 'first' } })
+    search()
+    await screen.findByText('Previous synthetic result')
+    fireEvent.change(query, { target: { value: 'stale' } })
+    expect(screen.queryByText('Previous synthetic result')).toBeNull()
+    search()
+    fireEvent.change(query, { target: { value: 'fresh' } })
+    search()
+    await screen.findByText('Current synthetic result')
+
+    await act(async () => {
+      resolveStale({ ok: true, json: async () => ({ items: [item(92, 'Stale synthetic result')] }) })
+      await staleSearch
+    })
+    expect(screen.getByText('Current synthetic result')).toBeTruthy()
+    expect(screen.queryByText('Stale synthetic result')).toBeNull()
+  })
+
+  it('ignores a delayed USDA error after the query changes', async () => {
+    let rejectStale!: (error: Error) => void
+    const staleSearch = new Promise<never>((_resolve, reject) => { rejectStale = reject })
+    const fetchMock = vi.fn((url: string) => url.startsWith('/experimental/usda/search')
+      ? staleSearch
+      : Promise.resolve({ ok: true, json: async () => ({ items: [] }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    const query = screen.getByLabelText('ชื่ออาหารภาษาอังกฤษ')
+    fireEvent.change(query, { target: { value: 'old synthetic query' } })
+    fireEvent.click(screen.getByRole('button', { name: 'ค้นหา USDA' }))
+    fireEvent.change(query, { target: { value: 'new synthetic query' } })
+
+    await act(async () => { rejectStale(new Error('synthetic delayed failure')) })
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
 })

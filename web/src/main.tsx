@@ -51,6 +51,7 @@ export function App() {
   const invalidHandled = useRef(false)
   const revision = useRef(0)
   const savedSearchRevision = useRef(0)
+  const usdaSearchRevision = useRef(0)
 
   useEffect(() => {
     const syncPage = () => {
@@ -160,15 +161,27 @@ export function App() {
   }
 
   async function searchUSDA() {
+    const requestRevision = ++usdaSearchRevision.current
+    const query = usdaQuery.trim()
     setUsdaBusy(true); setUsdaError(''); setUsdaFoods([])
     try {
-      const response = await fetch(`/experimental/usda/search?q=${encodeURIComponent(usdaQuery.trim())}`)
+      const response = await fetch(`/experimental/usda/search?q=${encodeURIComponent(query)}`)
       const payload = await response.json()
       if (!response.ok) throw new Error(typeof payload.detail === 'string' ? payload.detail : 'ค้นหาฐานข้อมูล USDA ไม่สำเร็จ')
-      setUsdaFoods(payload.items as USDAFood[])
+      if (requestRevision === usdaSearchRevision.current) setUsdaFoods(payload.items as USDAFood[])
     } catch {
-      setUsdaError('ค้นหา USDA ไม่สำเร็จ ตรวจ API และ USDA_FDC_API_KEY บนเครื่องนี้')
-    } finally { setUsdaBusy(false) }
+      if (requestRevision === usdaSearchRevision.current) setUsdaError('ค้นหา USDA ไม่สำเร็จ ตรวจ API และ USDA_FDC_API_KEY บนเครื่องนี้')
+    } finally {
+      if (requestRevision === usdaSearchRevision.current) setUsdaBusy(false)
+    }
+  }
+
+  function updateUSDAQuery(query: string) {
+    usdaSearchRevision.current++
+    setUsdaQuery(query)
+    setUsdaFoods([])
+    setUsdaError('')
+    setUsdaBusy(false)
   }
 
   function selectSource(index: number, source: IngredientSource) {
@@ -268,7 +281,7 @@ export function App() {
           <section className="usda-search" aria-label="แหล่งข้อมูลรอง USDA">
             <h2>แหล่งข้อมูลรอง: USDA FoodData Central</h2>
             <p>ใช้เมื่อไม่มีรายการที่บันทึกไว้เท่านั้น · เป็นข้อมูลอ้างอิง USDA ภาษาอังกฤษ (Foundation / SR Legacy) ไม่ใช่การแปลหรือเทียบอาหารไทย · คำค้นจะถูกส่งไป USDA จึงห้ามใส่ชื่อผู้ป่วยหรือข้อมูลส่วนบุคคล</p>
-            <label>ชื่ออาหารภาษาอังกฤษ <input value={usdaQuery} onChange={e => setUsdaQuery(e.target.value)} maxLength={200} autoComplete="off" /></label>
+            <label>ชื่ออาหารภาษาอังกฤษ <input value={usdaQuery} onChange={e => updateUSDAQuery(e.target.value)} maxLength={200} autoComplete="off" /></label>
             <button type="button" className="add-button" disabled={usdaBusy || !usdaQuery.trim()} onClick={() => void searchUSDA()}>{usdaBusy ? 'กำลังค้นหา…' : 'ค้นหา USDA'}</button>
             {usdaError && <p className="error" role="alert">{usdaError}</p>}
             <ul className="usda-results">{usdaFoods.map(food => <li key={food.fdc_id}><strong>{food.description}</strong><small>USDA FDC · รายการอ้างอิงไม่ใช่สินค้าแบรนด์ · {food.source_type} · {foodStateLabel(food.food_state)} · {food.source_version ?? 'รุ่นข้อมูลไม่ระบุ'} · ID {food.fdc_id}</small>
