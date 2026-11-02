@@ -3,10 +3,11 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 from api.main import app, _demo_store, _suggestions
+from api.ocr import OCRResult
 
 
 class SeasoningApiTest(unittest.TestCase):
@@ -74,3 +75,21 @@ class SeasoningApiTest(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=4) as executor:
             results = list(executor.map(lambda _: _demo_store().list(), range(8)))
         self.assertEqual(results, [[]] * 8)
+
+    def test_ocr_suggestions_require_review_before_persisting(self):
+        raw = 'Serving size 15 ml\nNutrition per serving\nSodium 120 mg\nProtein 0 g'
+        with patch('api.main.ocr_image', new=AsyncMock(return_value=OCRResult(raw))):
+            response = self.client.post('/experimental/ocr', json={
+                'synthetic_only': True, 'content_type': 'image/png', 'image_base64': 'dGVzdA=='})
+        self.assertEqual(response.status_code, 200)
+        suggestions = response.json()['suggestions']
+        self.assertTrue(response.json()['requires_human_review'])
+        self.assertEqual(self.client.get('/experimental/seasonings').json()['items'], [])
+        reviewed = {**self.payload, 'basis_quantity': suggestions['basis_quantity'],
+                    'basis_unit': suggestions['basis_unit'], 'nutrients': suggestions['nutrients']}
+        self.assertEqual(self.client.post('/experimental/seasonings', json={**reviewed, 'reviewed': False}).status_code, 422)
+        self.assertEqual(self.client.post('/experimental/seasonings', json=reviewed).status_code, 200)
+        item, = self.client.get('/experimental/seasonings').json()['items']
+        self.assertEqual(item['nutrients']['sodium_mg'], '120')
+        self.assertEqual(item['nutrients']['protein_g'], '0')
+        self.assertIsNone(item['nutrients']['potassium_mg'])

@@ -20,19 +20,23 @@ afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+  window.history.replaceState(null, '', '/')
 })
+
+const openRecipes = () => fireEvent.click(screen.getByRole('link', { name: 'สูตรอาหาร' }))
 
 describe('manual recipe UI', () => {
   it('requires synthetic-only confirmation', () => {
-    render(<App />)
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
     expect(screen.getByRole('checkbox', { name: /ยืนยันว่าข้อมูลทั้งหมด/ }).required).toBe(true)
     expect(screen.getByText(/ตัวเลขสมมติเท่านั้น/)).toBeTruthy()
     expect(screen.getByText(/ห้ามใช้ค่าจากฉลากอาหารจริงหรือข้อมูลผู้ป่วย/)).toBeTruthy()
     fireEvent.change(screen.getAllByLabelText(/ปริมาณที่ใช้/)[0], { target: { value: '100' } })
     fireEvent.click(screen.getByRole('button', { name: 'คำนวณสารอาหาร' }))
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(fetchMock.mock.calls.some(([url]) => url === '/experimental/recipes/calculate')).toBe(false)
   })
 
   it.each([
@@ -49,11 +53,12 @@ describe('manual recipe UI', () => {
     const fetchMock = vi.fn(() => delayedResponse)
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
+    openRecipes()
 
     fireEvent.change(screen.getAllByLabelText(/ปริมาณที่ใช้/)[0], { target: { value: '100' } })
     fireEvent.click(screen.getByRole('checkbox', { name: /ยืนยันว่าข้อมูลทั้งหมด/ }))
     fireEvent.click(screen.getByRole('button', { name: 'คำนวณสารอาหาร' }))
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/experimental/recipes/calculate')).toHaveLength(1)
 
     change()
 

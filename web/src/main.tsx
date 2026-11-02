@@ -1,4 +1,4 @@
-import { StrictMode, useRef, useState } from 'react'
+import { StrictMode, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { buildCalculationPayload, isCurrentRevision, nutrients, type FoodState, type Ingredient, type NutrientKey } from './request'
 import { OcrPreview } from './OcrPreview'
@@ -11,14 +11,50 @@ type Result = {
 const emptyValues = (): Ingredient['values'] => ({ energy_kcal: '', protein_g: '', sodium_mg: '', potassium_mg: '', phosphorus_mg: '' })
 const newIngredient = (): Ingredient => ({ name: '', amount: '', unit: 'g', state: 'raw', reference: '100', values: emptyValues() })
 const stateNames: Record<FoodState, string> = { raw: 'ดิบ', cooked: 'สุก', as_sold: 'ตามสภาพที่ซื้อ' }
+const pages = [
+  { id: 'home', label: 'หน้าหลัก', compact: 'หน้าแรก' },
+  { id: 'patients', label: 'ผู้ป่วย', compact: 'ผู้ป่วย' },
+  { id: 'ingredients', label: 'วัตถุดิบและเครื่องปรุง', compact: 'วัตถุดิบ' },
+  { id: 'recipes', label: 'สูตรอาหาร', compact: 'สูตรอาหาร' },
+  { id: 'meals', label: 'บันทึกอาหาร', compact: 'บันทึก' },
+] as const
+type PageId = typeof pages[number]['id']
+
+function readPage(fallback: PageId = 'home'): PageId {
+  const page = window.location.hash.slice(1)
+  return pages.some(item => item.id === page) ? page as PageId : fallback
+}
 
 export function App() {
+  const [page, setPage] = useState<PageId>(readPage)
+  const [ingredientsVisited, setIngredientsVisited] = useState(() => readPage() === 'ingredients')
   const [ingredients, setIngredients] = useState([newIngredient()])
   const [portion, setPortion] = useState('1')
   const [result, setResult] = useState<Result | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const revision = useRef(0)
+
+  useEffect(() => {
+    const syncPage = () => {
+      const nextPage = readPage(page)
+      setPage(nextPage)
+      if (nextPage === 'ingredients') setIngredientsVisited(true)
+    }
+    window.addEventListener('hashchange', syncPage)
+    window.addEventListener('popstate', syncPage)
+    return () => {
+      window.removeEventListener('hashchange', syncPage)
+      window.removeEventListener('popstate', syncPage)
+    }
+  }, [page])
+
+  function navigate(event: React.MouseEvent<HTMLAnchorElement>, nextPage: PageId) {
+    event.preventDefault()
+    window.history.pushState(null, '', `#${nextPage}`)
+    setPage(nextPage)
+    if (nextPage === 'ingredients') setIngredientsVisited(true)
+  }
 
   function update(index: number, changes: Partial<Ingredient>) {
     revision.current++
@@ -49,44 +85,57 @@ export function App() {
   }
 
   return <div className="app-shell">
-    <header className="topbar"><a className="brand" href="#top">ครัวอุ่นใจ <span>เครื่องมือทดลองสำหรับผู้ดูแล</span></a></header>
-    <main id="top">
-      <section className="intro">
-        <p className="eyebrow">ทดลองคำนวณสูตรอาหาร</p>
-        <h1>ใส่วัตถุดิบ<br />แล้วดูสารอาหาร</h1>
-        <p>ทดลองกรอกตัวเลขสมมติ ระบบคำนวณตามปริมาณที่ใช้และสัดส่วนเสิร์ฟ</p>
-      </section>
-      <aside className="notice" role="note">
-        <span className="notice-mark" aria-hidden="true">!</span>
-        <div><h2>ใช้ตัวเลขสมมติเท่านั้น</h2><p>ห้ามใช้ค่าจากฉลากอาหารจริงหรือข้อมูลผู้ป่วย ระบบไม่มีฐานข้อมูลอาหาร ไม่บันทึกสูตร และผลนี้ใช้ตัดสินใจด้านอาหารหรือการรักษาไม่ได้</p></div>
-      </aside>
-      <form onSubmit={calculate}>
-        <section className="section-heading"><div><p className="eyebrow">สูตรทดลอง</p><h2>รายการวัตถุดิบ</h2></div><button type="button" className="add-button" onClick={() => { revision.current++; setIngredients(items => [...items, newIngredient()]); setResult(null) }}>＋ เพิ่มวัตถุดิบ</button></section>
-        {ingredients.map((item, index) => <fieldset className="ingredient-card" key={index}>
-          <legend>วัตถุดิบ {index + 1}</legend>
-          {ingredients.length > 1 && <button type="button" className="remove-button" aria-label={`ลบวัตถุดิบ ${index + 1}`} onClick={() => { revision.current++; setIngredients(items => items.filter((_, i) => i !== index)); setResult(null) }}>ลบ</button>}
-          <label>ชื่อวัตถุดิบ <input value={item.name} onChange={e => update(index, { name: e.target.value })} placeholder="เช่น ข้าวสวย" autoComplete="off" /></label>
-          <div className="field-grid">
-            <label>ปริมาณที่ใช้ <span className="input-unit"><input required inputMode="decimal" type="number" min="0.00000001" step="any" value={item.amount} onChange={e => update(index, { amount: e.target.value })} placeholder="เช่น 150" /><select aria-label="หน่วยปริมาณ" value={item.unit} onChange={e => update(index, { unit: e.target.value as Ingredient['unit'] })}><option value="g">กรัม</option><option value="ml">มล.</option></select></span></label>
-            <label>สภาพอาหาร <select value={item.state} onChange={e => update(index, { state: e.target.value as FoodState })}>{Object.entries(stateNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-          </div>
-          <label>ข้อมูลสารอาหารต่อ <span className="inline-input"><input required inputMode="decimal" type="number" min="0.00000001" step="any" value={item.reference} onChange={e => update(index, { reference: e.target.value })} /><span>{item.unit === 'g' ? 'กรัม' : 'มล.'} (หน่วยเดียวกับปริมาณที่ใช้)</span></span></label>
-          <div className="nutrient-grid"><p className="subheading">สารอาหารในปริมาณอ้างอิง <span>เว้นว่างได้เมื่อไม่ทราบ</span></p>
-            {nutrients.map(([key, label, unit]) => <label key={key}>{label} <span className="nutrient-unit"><input inputMode="decimal" type="number" min="0" step="any" value={item.values[key]} onChange={e => update(index, { values: { ...item.values, [key]: e.target.value } })} placeholder="ไม่ทราบ" /><span>{unit}</span></span></label>)}
-          </div>
-        </fieldset>)}
-        <section className="portion-card"><label htmlFor="portion">สัดส่วนที่เสิร์ฟ</label><div><input id="portion" required inputMode="decimal" type="number" min="0.00000001" max="1" step="any" value={portion} onChange={e => { revision.current++; setPortion(e.target.value); setResult(null) }} /><span>ส่วนของสูตรทั้งหมด (0–1)</span></div></section>
-        <label className="attestation"><input type="checkbox" required /> ยืนยันว่าข้อมูลทั้งหมดเป็นตัวเลขสมมติ ไม่ได้ใช้ค่าจากฉลากอาหารจริงหรือข้อมูลผู้ป่วย</label>
-        <button className="submit-button" type="submit" disabled={busy}>{busy ? 'กำลังคำนวณ…' : 'คำนวณสารอาหาร'}</button>
-      </form>
-      {error && <p className="error" role="alert">{error}</p>}
-      {result && <section className="results" aria-live="polite" aria-labelledby="results-title"><div className="result-title"><div><p className="eyebrow">ผลทดลอง · {result.portion} ส่วน</p><h2 id="results-title">สารอาหารโดยประมาณ</h2></div><span className="status-pill">ไม่ใช่คำแนะนำทางการแพทย์</span></div>
-        <ul>{nutrients.map(([key, label, unit]) => { const total = result.totals[key]; return <li key={key}><span>{label}</span><strong>{total.value === null ? 'ไม่ทราบ' : `${total.value} ${unit}`}</strong><small>{total.complete ? 'ข้อมูลครบตามที่กรอก' : 'ข้อมูลไม่ครบ · มีรายการที่ไม่ทราบ'}</small></li> })}</ul>
-        <p className="footnote">ค่าที่ทราบรวมตามสูตรและสัดส่วนเสิร์ฟ ค่าที่เว้นว่างยังคงเป็น “ไม่ทราบ” ไม่ได้ถือเป็นศูนย์</p>
+    <a className="skip-link" href="#main-content">ข้ามเมนูไปเนื้อหา</a>
+    <header className="topbar"><a className="brand" href="#home" onClick={event => navigate(event, 'home')}>ครัวอุ่นใจ <span>เครื่องมือทดลองสำหรับผู้ดูแล</span></a></header>
+    <nav className="primary-nav" aria-label="เมนูหลัก">
+      {pages.map(item => <a key={item.id} href={`#${item.id}`} aria-label={item.label} aria-current={page === item.id ? 'page' : undefined} onClick={event => navigate(event, item.id)}>
+        <span className="nav-label-desktop">{item.label}</span><span className="nav-label-mobile" aria-hidden="true">{item.compact}</span>
+      </a>)}
+    </nav>
+    <main id="main-content" tabIndex={-1}>
+      {page === 'home' && <section className="home-view" aria-labelledby="home-title">
+        <div className="intro"><h1 id="home-title">วางแผนอาหาร<br />ทีละขั้น</h1><p>จัดเก็บข้อมูลเครื่องปรุงที่ตรวจเอง และทดลองคำนวณสูตรอาหาร</p></div>
+        <aside className="notice" role="note"><span className="notice-mark" aria-hidden="true">!</span><div><h2>ต้นแบบทดลอง</h2><p>ยังไม่พร้อมใช้กับข้อมูลผู้ป่วยหรือฉลากจริง · ไม่มีการตรวจสอบทางคลินิก</p></div></aside>
+        <h2>เริ่มจากเครื่องปรุง</h2>
+        <p>ถ่ายหรือเลือกภาพทดสอบ ตรวจค่าที่อ่านได้ แล้วบันทึกเฉพาะหลังตรวจสอบ</p>
+        <a className="home-action" href="#ingredients" onClick={event => navigate(event, 'ingredients')}>วัตถุดิบและเครื่องปรุง <span>เพิ่มจากภาพทดสอบ</span></a>
+        <a className="home-action" href="#recipes" onClick={event => navigate(event, 'recipes')}>สูตรอาหาร <span>เปิดเครื่องคำนวณทดลอง</span></a>
+        <h2 className="home-subheading">ส่วนที่กำลังพัฒนา</h2>
+        <p>ข้อมูลผู้ป่วยและบันทึกอาหารยังไม่มีระบบบันทึก</p>
       </section>}
-      <OcrPreview />
+      {page === 'patients' && <section className="placeholder-page" aria-labelledby="patients-title"><h1 id="patients-title">ผู้ป่วย</h1><p className="status-line">กำลังพัฒนา</p><p>ส่วนนี้ยังไม่มีระบบสร้างหรือบันทึกโปรไฟล์ผู้ป่วย โปรดอย่ากรอกข้อมูลจริงในต้นแบบนี้</p></section>}
+      {ingredientsVisited && <section hidden={page !== 'ingredients'} aria-labelledby="ingredients-title"><div className="page-intro"><h1 id="ingredients-title">วัตถุดิบและเครื่องปรุง</h1><p>การอ่านภาพและบันทึกยังเป็นการทดลอง ใช้ภาพทดสอบเท่านั้น</p></div><OcrPreview /></section>}
+      {page === 'recipes' && <section aria-labelledby="recipe-title">
+        <div className="page-intro"><h1 id="recipe-title">สูตรอาหาร</h1><p>เครื่องคำนวณทดลองจากตัวเลขสมมติ ยังไม่มีระบบบันทึกสูตร</p></div>
+        <aside className="notice" role="note"><span className="notice-mark" aria-hidden="true">!</span><div><h2>ใช้ตัวเลขสมมติเท่านั้น</h2><p>ห้ามใช้ค่าจากฉลากอาหารจริงหรือข้อมูลผู้ป่วย ผลนี้ใช้ตัดสินใจด้านอาหารหรือการรักษาไม่ได้</p></div></aside>
+        <form onSubmit={calculate}>
+          <section className="section-heading"><h2>รายการวัตถุดิบ</h2><button type="button" className="add-button" onClick={() => { revision.current++; setIngredients(items => [...items, newIngredient()]); setResult(null) }}>＋ เพิ่มวัตถุดิบ</button></section>
+          {ingredients.map((item, index) => <fieldset className="ingredient-card" key={index}>
+            <legend>วัตถุดิบ {index + 1}</legend>
+            {ingredients.length > 1 && <button type="button" className="remove-button" aria-label={`ลบวัตถุดิบ ${index + 1}`} onClick={() => { revision.current++; setIngredients(items => items.filter((_, i) => i !== index)); setResult(null) }}>ลบ</button>}
+            <label>ชื่อวัตถุดิบ <input value={item.name} onChange={e => update(index, { name: e.target.value })} placeholder="เช่น ข้าวสวย" autoComplete="off" /></label>
+            <div className="field-grid">
+              <label>ปริมาณที่ใช้ <span className="input-unit"><input required inputMode="decimal" type="number" min="0.00000001" step="any" value={item.amount} onChange={e => update(index, { amount: e.target.value })} placeholder="เช่น 150" /><select aria-label="หน่วยปริมาณ" value={item.unit} onChange={e => update(index, { unit: e.target.value as Ingredient['unit'] })}><option value="g">กรัม</option><option value="ml">มล.</option></select></span></label>
+              <label>สภาพอาหาร <select value={item.state} onChange={e => update(index, { state: e.target.value as FoodState })}>{Object.entries(stateNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+            </div>
+            <label>ข้อมูลสารอาหารต่อ <span className="inline-input"><input required inputMode="decimal" type="number" min="0.00000001" step="any" value={item.reference} onChange={e => update(index, { reference: e.target.value })} /><span>{item.unit === 'g' ? 'กรัม' : 'มล.'} (หน่วยเดียวกับปริมาณที่ใช้)</span></span></label>
+            <div className="nutrient-grid"><p className="subheading">สารอาหารในปริมาณอ้างอิง <span>เว้นว่างได้เมื่อไม่ทราบ</span></p>
+              {nutrients.map(([key, label, unit]) => <label key={key}>{label} <span className="nutrient-unit"><input inputMode="decimal" type="number" min="0" step="any" value={item.values[key]} onChange={e => update(index, { values: { ...item.values, [key]: e.target.value } })} placeholder="ไม่ทราบ" /><span>{unit}</span></span></label>)}
+            </div>
+          </fieldset>)}
+          <section className="portion-card"><label htmlFor="portion">สัดส่วนที่เสิร์ฟ</label><div><input id="portion" required inputMode="decimal" type="number" min="0.00000001" max="1" step="any" value={portion} onChange={e => { revision.current++; setPortion(e.target.value); setResult(null) }} /><span>ส่วนของสูตรทั้งหมด (0–1)</span></div></section>
+          <label className="attestation"><input type="checkbox" required /> ยืนยันว่าข้อมูลทั้งหมดเป็นตัวเลขสมมติ ไม่ได้ใช้ค่าจากฉลากอาหารจริงหรือข้อมูลผู้ป่วย</label>
+          <button className="submit-button" type="submit" disabled={busy}>{busy ? 'กำลังคำนวณ…' : 'คำนวณสารอาหาร'}</button>
+        </form>
+        {error && <p className="error" role="alert">{error}</p>}
+        {result && <section className="results" aria-live="polite" aria-labelledby="results-title"><div className="result-title"><h2 id="results-title">สารอาหารโดยประมาณ · {result.portion} ส่วน</h2><span className="status-pill">ไม่ใช่คำแนะนำทางการแพทย์</span></div>
+          <ul>{nutrients.map(([key, label, unit]) => { const total = result.totals[key]; return <li key={key}><span>{label}</span><strong>{total.value === null ? 'ไม่ทราบ' : `${total.value} ${unit}`}</strong><small>{total.complete ? 'ข้อมูลครบตามที่กรอก' : 'ข้อมูลไม่ครบ · มีรายการที่ไม่ทราบ'}</small></li> })}</ul>
+          <p className="footnote">ค่าที่ทราบรวมตามสูตรและสัดส่วนเสิร์ฟ ค่าที่เว้นว่างยังคงเป็น “ไม่ทราบ” ไม่ได้ถือเป็นศูนย์</p>
+        </section>}
+      </section>}
+      {page === 'meals' && <section className="placeholder-page" aria-labelledby="meals-title"><h1 id="meals-title">บันทึกอาหาร</h1><p className="status-line">กำลังพัฒนา</p><p>ยังไม่มีระบบบันทึกมื้ออาหารหรือประวัติการรับประทาน ส่วนนี้ยังไม่เก็บข้อมูล</p></section>}
     </main>
-    <footer><p>ต้นแบบทดลอง · ไม่บันทึกข้อมูล · ไม่มีข้อมูลอาหารจริงหรือการตรวจสอบทางคลินิก</p></footer>
+    <footer><p>ข้อมูลทดสอบเท่านั้น · ยังไม่มีการตรวจสอบทางคลินิก · ห้ามใช้ตัดสินใจด้านการรักษา</p></footer>
   </div>
 }
 
