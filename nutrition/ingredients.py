@@ -160,6 +160,49 @@ class IngredientStore:
             )
             return cursor.lastrowid
 
+    def create_reviewed(self, *, name: str, provider: str, version: str,
+                        source_version: str, retrieved_on: str, source_reference: str,
+                        provenance: str, basis_quantity: Decimal, basis_unit: str,
+                        food_state: str, reviewed: bool, source_date: str | None = None,
+                        nutrients: dict | None = None) -> dict:
+        """Create one reviewed ingredient and its first immutable source snapshot atomically."""
+        if reviewed is not True:
+            raise ValueError("User review is required")
+        name = _text(name, "name")
+        version = _text(version, "version")
+        provider = _text(provider, "provider")
+        source_version = _text(source_version, "source_version")
+        source_date = _day(source_date, "source_date", optional=True)
+        retrieved_on = _day(retrieved_on, "retrieved_on")
+        source_reference = _text(source_reference, "source_reference")
+        provenance = _text(provenance, "provenance")
+        basis_quantity = _decimal(basis_quantity, "basis_quantity", positive=True)
+        if basis_unit not in ("g", "ml"):
+            raise ValueError("basis_unit must be g or ml")
+        if food_state not in ("raw", "cooked", "as_sold"):
+            raise ValueError("food_state must be raw, cooked, or as_sold")
+        nutrients = {} if nutrients is None else nutrients
+        if not isinstance(nutrients, dict) or set(nutrients) - set(NUTRIENTS):
+            raise ValueError("nutrients must map supported nutrient names to Decimal or None")
+        nutrient_values = [_decimal(nutrients.get(key), key) for key in NUTRIENTS]
+        columns = ", ".join(f'"{key}"' for key in NUTRIENTS)
+        placeholders = ", ".join("?" for _ in NUTRIENTS)
+        with self._connect() as db:
+            ingredient_id = db.execute(
+                "INSERT INTO ingredients(name) VALUES (?)", (name,)
+            ).lastrowid
+            version_id = db.execute(
+                f"""INSERT INTO ingredient_versions
+                    (ingredient_id, version, provider, source_version, source_date, retrieved_on,
+                     source_reference, provenance, basis_quantity, basis_unit, food_state, reviewed,
+                     {columns})
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {placeholders})""",
+                (ingredient_id, version, provider, source_version, source_date, retrieved_on,
+                 source_reference, provenance, basis_quantity, basis_unit, food_state, 1,
+                 *nutrient_values),
+            ).lastrowid
+        return {"ingredient_id": ingredient_id, "version_id": version_id}
+
     def get_ingredient(self, ingredient_id: int) -> dict | None:
         """Return source snapshots in insertion order; callers must validate units before calculation."""
         if isinstance(ingredient_id, bool) or not isinstance(ingredient_id, int) or ingredient_id <= 0:

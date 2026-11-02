@@ -1,6 +1,7 @@
 import { StrictMode, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { buildCalculationPayload, isCurrentRevision, nutrients, type FoodState, type Ingredient, type IngredientSource, type NutrientKey, type SavedIngredient, type SavedSeasoning } from './request'
+import { ManualIngredientForm } from './ManualIngredientForm'
 import { OcrPreview } from './OcrPreview'
 import './style.css'
 
@@ -8,7 +9,7 @@ type Result = {
   experimental: boolean; clinical_use: boolean; rounding: string; portion: string;
   totals: Record<NutrientKey, { value: string | null; complete: boolean }>;
   sources?: Array<{ source_id: string; description: string; source_type: string; source_version: string | null; food_state: FoodState; energy_ambiguous: boolean }>
-  saved_sources?: Array<{ version_id: number; name: string; provider: string; source_version: string; source_reference: string; provenance: string; retrieved_on: string; food_state: FoodState }>
+  saved_sources?: Array<{ version_id: number; name: string; provider: string; source_version: string; source_date: string | null; source_reference: string; provenance: string; retrieved_on: string; food_state: FoodState }>
 }
 type USDAFood = { fdc_id: number; description: string; source_type: string; source_version: string | null; food_state: FoodState | null }
 const emptyValues = (): Ingredient['values'] => ({ energy_kcal: '', protein_g: '', sodium_mg: '', potassium_mg: '', phosphorus_mg: '' })
@@ -281,7 +282,7 @@ export function App() {
         <p>ข้อมูลผู้ป่วยและบันทึกอาหารยังไม่มีระบบบันทึก</p>
       </section>}
       {page === 'patients' && <section className="placeholder-page" aria-labelledby="patients-title"><h1 id="patients-title">ผู้ป่วย</h1><p className="status-line">กำลังพัฒนา</p><p>ส่วนนี้ยังไม่มีระบบสร้างหรือบันทึกโปรไฟล์ผู้ป่วย โปรดอย่ากรอกข้อมูลจริงในต้นแบบนี้</p></section>}
-      {ingredientsVisited && <section hidden={page !== 'ingredients'} aria-labelledby="ingredients-title"><div className="page-intro"><h1 id="ingredients-title">วัตถุดิบและเครื่องปรุง</h1><p>การอ่านภาพและบันทึกยังเป็นการทดลอง ใช้ภาพทดสอบเท่านั้น</p></div><OcrPreview /></section>}
+      {ingredientsVisited && <section hidden={page !== 'ingredients'} aria-labelledby="ingredients-title"><div className="page-intro"><h1 id="ingredients-title">วัตถุดิบและเครื่องปรุง</h1><p>การอ่านภาพและบันทึกยังเป็นการทดลอง ใช้ภาพทดสอบเท่านั้น</p></div><OcrPreview /><ManualIngredientForm /></section>}
       {page === 'recipes' && <section aria-labelledby="recipe-title">
         <div className="page-intro"><h1 id="recipe-title">สูตรอาหาร</h1><p>เครื่องคำนวณทดลอง ยังไม่มีระบบบันทึกสูตร · USDA เป็นข้อมูลอาหารจริงสาธารณะ</p></div>
         <aside className="notice" role="note"><span className="notice-mark" aria-hidden="true">!</span><div><h2>ใช้ตัวเลขสมมติเท่านั้น</h2><p>ห้ามใช้ค่าจากฉลากอาหารจริงหรือข้อมูลผู้ป่วย ผลนี้ใช้ตัดสินใจด้านอาหารหรือการรักษาไม่ได้</p></div></aside>
@@ -306,7 +307,7 @@ export function App() {
             <label>ชื่อที่บันทึกไว้ <input value={savedQuery} onChange={e => updateSavedQuery(e.target.value)} maxLength={100} autoComplete="off" /></label>
             <button type="button" className="add-button" disabled={savedSearchBusy || !savedQuery.trim()} onClick={() => void searchSavedIngredients()}>{savedSearchBusy ? 'กำลังค้นหา…' : 'ค้นหารายการในเครื่อง'}</button>
             {savedSearchError && <p className="error" role="alert">{savedSearchError}</p>}
-            <ul className="usda-results">{savedIngredients.map(food => <li key={food.version_id}><strong>{food.name}{food.brand ? ` · ${food.brand}` : ''}</strong><small>รุ่นที่บันทึกไว้ · {food.provider} · {food.source_version} · {food.provenance} · สภาพ {stateNames[food.food_state]} · ฐาน {food.basis_quantity} {food.basis_unit === 'g' ? 'กรัม' : 'มล.'} · บันทึก {food.retrieved_on} · {food.source_reference} · รุ่น {food.version_id}</small>
+            <ul className="usda-results">{savedIngredients.map(food => <li key={food.version_id}><strong>{food.name}{food.brand ? ` · ${food.brand}` : ''}</strong><small>รุ่นที่บันทึกไว้ · {food.provider} · {food.source_version} · วันที่แหล่งข้อมูล {food.source_date ?? 'ไม่ระบุ'} · {food.provenance} · สภาพ {stateNames[food.food_state]} · ฐาน {food.basis_quantity} {food.basis_unit === 'g' ? 'กรัม' : 'มล.'} · บันทึก {food.retrieved_on} · {food.source_reference} · รุ่น {food.version_id}</small>
               <button type="button" className="add-button" onClick={() => addSavedIngredient(food)}>เลือกเป็นรายการใหม่</button></li>)}</ul>
           </section>
           <section className="usda-search" aria-label="แหล่งข้อมูลรอง USDA">
@@ -359,7 +360,7 @@ export function App() {
         {result && <section className="results" aria-live="polite" aria-labelledby="results-title"><div className="result-title"><h2 id="results-title">สารอาหารโดยประมาณ · {result.portion} ส่วน</h2><span className="status-pill">ไม่ใช่คำแนะนำทางการแพทย์</span></div>
           <ul>{nutrients.map(([key, label, unit]) => { const total = result.totals[key]; return <li key={key}><span>{label}</span><strong>{total.value === null ? 'ไม่ทราบ' : `${total.value} ${unit}`}</strong><small>{total.complete ? 'ข้อมูลครบตามที่กรอก' : 'ข้อมูลไม่ครบ · มีรายการที่ไม่ทราบ'}</small></li> })}</ul>
           {result.sources?.map(source => <p className="footnote" key={source.source_id}>แหล่งข้อมูล USDA อ้างอิงไม่ใช่สินค้าแบรนด์: {source.source_id} · {source.description} · {source.source_type} · สภาพ {stateNames[source.food_state]} · รุ่น {source.source_version ?? 'ไม่ระบุ'}{source.energy_ambiguous ? ' · พลังงานมีหลายค่าขัดแย้ง จึงแสดงเป็นไม่ทราบ' : ''}</p>)}
-          {result.saved_sources?.map(source => <p className="footnote" key={source.version_id}>รายการที่บันทึกในเครื่อง รุ่น {source.version_id}: {source.name} · {source.provider} · {source.source_version} · {source.provenance} · {source.source_reference} · บันทึก {source.retrieved_on} · สภาพ {stateNames[source.food_state]}</p>)}
+          {result.saved_sources?.map(source => <p className="footnote" key={source.version_id}>รายการที่บันทึกในเครื่อง รุ่น {source.version_id}: {source.name} · {source.provider} · {source.source_version} · วันที่แหล่งข้อมูล {source.source_date ?? 'ไม่ระบุ'} · {source.provenance} · {source.source_reference} · บันทึก {source.retrieved_on} · สภาพ {stateNames[source.food_state]}</p>)}
           <p className="footnote">ค่าที่ทราบรวมตามสูตรและสัดส่วนเสิร์ฟ ค่าที่เว้นว่างยังคงเป็น “ไม่ทราบ” ไม่ได้ถือเป็นศูนย์</p>
         </section>}
       </section>}
