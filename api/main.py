@@ -19,13 +19,14 @@ from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictBool, StrictInt, ValidationError, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictBool, StrictInt, ValidationError, field_validator, model_validator
 
 from nutrition.calculator import NUTRIENTS, Measure, NutrientSource, calculate
 from nutrition.label_parser import parse_nutrition_label
 from nutrition.recipes import RecipeStore
 from nutrition.seasonings import SeasoningStore
 from nutrition.profiles import ProfileStore
+from nutrition.tracking import MealTrackingStore
 from api.ocr import MAX_IMAGE_BYTES, OCRServiceError, ocr_image
 from nutrition.local_translation import LocalTranslationError, translate_food_text
 from nutrition.usda_fdc import USDAFDCClient, USDAFDCError
@@ -220,6 +221,27 @@ class SyntheticWeightInput(BaseModel):
     kilograms: Positive
 
 
+class SyntheticMealInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    synthetic_only: Literal[True]
+    recipe_id: Annotated[StrictInt, Field(gt=0, le=2**63 - 1)]
+    consumed_at: datetime
+    portion: Portion
+
+    @field_validator("consumed_at", mode="before")
+    @classmethod
+    def require_iso_timezone_text(cls, value):
+        if not isinstance(value, str):
+            raise ValueError("consumed_at must be an ISO datetime string with a timezone")
+        try:
+            parsed = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("consumed_at must be an ISO datetime string with a timezone") from exc
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("consumed_at must include a timezone")
+        return value
+
+
 def _demo_store():
     path = os.environ.get('KIDNEY_EXPERIMENTAL_DB')
     if not path:
@@ -262,6 +284,32 @@ def _demo_store():
 
 def _recipe_store():
     return RecipeStore(_demo_store().ingredients.database)
+
+
+def _meal_store():
+    _profile_store()
+    _recipe_store()
+    return MealTrackingStore(_demo_store().ingredients.database)
+
+
+def _meal_entry_response(entry):
+    ingredients = []
+    for ingredient in entry["ingredients"]:
+        item = dict(ingredient)
+        for key in ("amount", "basis_quantity", *NUTRIENTS):
+            if item[key] is not None:
+                item[key] = str(item[key])
+        ingredients.append(item)
+    return {
+        **{key: entry[key] for key in ("id", "profile_id", "recipe_id", "recipe_name", "consumed_at_utc", "local_date")},
+        "portion": str(entry["portion"]),
+        "ingredients": ingredients,
+        "goals": [{**goal, "amount": str(goal["amount"])} for goal in entry["goals"]],
+        "totals": {name: {"value": str(value) if value is not None else None, "complete": complete}
+                   for name, (value, complete) in entry["totals"].items()},
+        "adjustment": entry["adjustment"],
+        "synthetic_only": True, "clinical_use": False,
+    }
 
 
 def _recipe_response(recipe):
@@ -391,6 +439,63 @@ def add_profile_weight(profile_id: Annotated[int, Field(gt=0)], payload: Synthet
         raise HTTPException(status_code=422, detail='Check the weight fields and try again') from exc
     except sqlite3.Error as exc:
         raise HTTPException(status_code=503, detail='Weight storage is unavailable') from exc
+
+
+@app.post('/experimental/profiles/{profile_id}/meals')
+def record_profile_meal(profile_id: Annotated[int, Field(gt=0, le=2**63 - 1)], payload: SyntheticMealInput):
+    try:
+        entry_id = _meal_store().record_consumption(profile_id, payload.recipe_id,
+                                                    payload.consumed_at, payload.portion)
+        return {'id': entry_id, 'profile_id': profile_id, 'recipe_id': payload.recipe_id,
+                'saved': True, 'synthetic_only': True, 'clinical_use': False}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail='Profile or recipe not found') from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail='Check profile, recipe, date, and portion') from exc
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail='Meal storage is unavailable; save outcome may be uncertain') from exc
+
+
+@app.get('/experimental/profiles/{profile_id}/meals')
+def list_profile_meals(profile_id: Annotated[int, Field(gt=0, le=2**63 - 1)], day: date,
+                       limit: Annotated[int, Field(ge=1, le=100)] = 50):
+    try:
+        entries = _meal_store().list_entries(profile_id, day, limit)
+        return {'items': [_meal_entry_response(entry) for entry in entries],
+                'profile_id': profile_id, 'day': day.isoformat(),
+                'synthetic_only': True, 'clinical_use': False}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail='Profile not found') from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail='Invalid profile, date, or limit') from exc
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail='Meal storage is unavailable') from exc
+
+
+@app.get('/experimental/profiles/{profile_id}/meals/daily')
+def get_profile_daily_meals(profile_id: Annotated[int, Field(gt=0, le=2**63 - 1)], day: date):
+    return _meal_totals_response(profile_id, day, weekly=False)
+
+
+@app.get('/experimental/profiles/{profile_id}/meals/weekly')
+def get_profile_weekly_meals(profile_id: Annotated[int, Field(gt=0, le=2**63 - 1)], day: date):
+    return _meal_totals_response(profile_id, day, weekly=True)
+
+
+def _meal_totals_response(profile_id: int, day: date, weekly: bool):
+    try:
+        store = _meal_store()
+        result = store.get_weekly_totals(profile_id, day) if weekly else store.get_daily_totals(profile_id, day)
+        return {**result,
+                'totals': {name: {'value': str(value) if value is not None else None, 'complete': complete}
+                           for name, (value, complete) in result['totals'].items()},
+                'synthetic_only': True, 'clinical_use': False}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail='Profile not found') from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail='Invalid profile or date') from exc
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail='Meal storage is unavailable') from exc
 
 
 @app.get("/experimental/usda/search")

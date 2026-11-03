@@ -19,8 +19,8 @@ except ZoneInfoNotFoundError as exc:
 
 
 def _positive_id(value, field):
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{field} must be a positive integer")
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 < value <= 2**63 - 1:
+        raise ValueError(f"{field} must be a positive SQLite integer")
     return value
 
 
@@ -33,8 +33,11 @@ def _portion(value):
 def _consumed_at(value):
     if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("consumed_at must be a timezone-aware datetime")
-    local_date = value.astimezone(BANGKOK).date().isoformat()
-    utc_timestamp = value.astimezone(timezone.utc).isoformat(timespec="microseconds")
+    try:
+        local_date = value.astimezone(BANGKOK).date().isoformat()
+        utc_timestamp = value.astimezone(timezone.utc).isoformat(timespec="microseconds")
+    except OverflowError as exc:
+        raise ValueError("consumed_at is outside the supported date range") from exc
     return utc_timestamp, local_date
 
 
@@ -417,12 +420,31 @@ class MealTrackingStore:
                 },
             }
 
+    def list_entries(self, profile_id: int, day: date, limit: int = 50) -> list[dict]:
+        """Return a bounded, newest-first page of sealed entries for one Bangkok civil day."""
+        profile_id = _positive_id(profile_id, "profile_id")
+        day_text = _day(day)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("limit must be an integer between 1 and 100")
+        with self._connect() as db:
+            if db.execute("SELECT 1 FROM patient_profiles WHERE id = ?", (profile_id,)).fetchone() is None:
+                raise LookupError("profile not found")
+            rows = db.execute(
+                """SELECT e.id FROM meal_entries e
+                   JOIN meal_entry_seals s ON s.meal_entry_id = e.id
+                   WHERE e.profile_id = ? AND e.local_date = ?
+                   ORDER BY e.consumed_at_utc DESC, e.id DESC LIMIT ?""",
+                (profile_id, day_text, limit),
+            ).fetchall()
+        return [self.get_entry(row["id"]) for row in rows]
+
     def _period_totals(self, profile_id: int, start: date, end: date) -> dict:
         profile_id = _positive_id(profile_id, "profile_id")
         start_text, end_text = _day(start), _day(end)
         if start_text > end_text:
             raise ValueError("period start must not be after end")
         with self._connect() as db:
+            db.execute("BEGIN")
             if db.execute("SELECT 1 FROM patient_profiles WHERE id = ?", (profile_id,)).fetchone() is None:
                 raise LookupError("profile not found")
             count = db.execute(
@@ -465,4 +487,6 @@ class MealTrackingStore:
         """Sum the ISO week containing the Bangkok civil date; weeks run Monday through Sunday."""
         _day(day_in_week)
         monday = day_in_week - timedelta(days=day_in_week.weekday())
+        if monday > date.max - timedelta(days=6):
+            raise ValueError("week exceeds supported date range")
         return self._period_totals(profile_id, monday, monday + timedelta(days=6))

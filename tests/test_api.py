@@ -466,5 +466,105 @@ class ExperimentalProfileApiTest(unittest.TestCase):
         self.assertEqual(tables, {'unrelated_records'})
 
 
+class ExperimentalMealApiTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.db_path = Path(self.temp.name) / 'synthetic-meals.sqlite'
+        self.env = patch.dict(os.environ, {'KIDNEY_EXPERIMENTAL_DB': str(self.db_path)})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self.client = TestClient(app, client=('127.0.0.1', 12345), base_url='http://127.0.0.1')
+        profile = self.client.post('/experimental/profiles', json={
+            'synthetic_only': True, 'name': 'Synthetic meal profile',
+        })
+        self.profile_id = profile.json()['id']
+        ingredient = self.client.post('/experimental/ingredients', json={
+            'synthetic_only': True, 'reviewed': True, 'name': 'Synthetic rice',
+            'provider': 'Synthetic fixture', 'source_version': 'fixture-v1',
+            'source_reference': 'synthetic://rice', 'provenance': 'test only',
+            'basis_quantity': '100', 'basis_unit': 'g', 'food_state': 'cooked',
+            'nutrients': {'energy_kcal': '130', 'sodium_mg': '0'},
+        })
+        self.version_id = ingredient.json()['version_id']
+        recipe = self.client.post('/experimental/recipes', json={
+            'synthetic_only': True, 'name': 'Synthetic bowl', 'ingredients': [{
+                'ingredient_version_id': self.version_id, 'amount': '100',
+                'unit': 'g', 'food_state': 'cooked',
+            }],
+        })
+        self.recipe_id = recipe.json()['id']
+
+    def test_record_list_and_totals_use_bangkok_day_and_snapshot(self):
+        body = {'synthetic_only': True, 'recipe_id': self.recipe_id,
+                'consumed_at': '2026-01-03T17:30:00Z', 'portion': '0.5'}
+        saved = self.client.post(f'/experimental/profiles/{self.profile_id}/meals', json=body)
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(saved.json(), {'id': 1, 'profile_id': self.profile_id, 'recipe_id': self.recipe_id,
+                                        'saved': True, 'synthetic_only': True, 'clinical_use': False})
+        self.assertTrue(saved.json()['synthetic_only'])
+
+        self.client.put(f'/experimental/recipes/{self.recipe_id}/ingredients', json={
+            'synthetic_only': True, 'ingredients': [{
+                'ingredient_version_id': self.version_id, 'amount': '200',
+                'unit': 'g', 'food_state': 'cooked',
+            }],
+        })
+        history = self.client.get(f'/experimental/profiles/{self.profile_id}/meals?day=2026-01-04&limit=10')
+        self.assertEqual(history.status_code, 200)
+        self.assertEqual(history.json()['items'][0]['ingredients'][0]['amount'], '100')
+        daily = self.client.get(f'/experimental/profiles/{self.profile_id}/meals/daily?day=2026-01-04')
+        self.assertEqual(daily.json()['totals']['energy_kcal'], {'value': '65.0', 'complete': True})
+        weekly = self.client.get(f'/experimental/profiles/{self.profile_id}/meals/weekly?day=2026-01-04')
+        self.assertEqual((weekly.json()['start_date'], weekly.json()['end_date']), ('2025-12-29', '2026-01-04'))
+
+    def test_record_requires_synthetic_attestation_timezone_and_fraction(self):
+        path = f'/experimental/profiles/{self.profile_id}/meals'
+        valid = {'synthetic_only': True, 'recipe_id': self.recipe_id,
+                 'consumed_at': '2026-01-03T17:30:00Z', 'portion': '1'}
+        for body in (
+            {key: value for key, value in valid.items() if key != 'synthetic_only'},
+            {**valid, 'synthetic_only': False},
+            {**valid, 'patient_id': 'unexpected'},
+            {**valid, 'consumed_at': '2026-01-03T17:30:00'},
+            {**valid, 'consumed_at': 0},
+            {**valid, 'consumed_at': '0'},
+            {**valid, 'consumed_at': '0001-01-01T00:00:00+14:00'},
+            {**valid, 'consumed_at': '9999-12-31T23:59:59-12:00'},
+            {**valid, 'recipe_id': 9223372036854775808},
+            {**valid, 'portion': '0'},
+            {**valid, 'portion': '1.01'},
+        ):
+            self.assertEqual(self.client.post(path, json=body).status_code, 422)
+        offset = self.client.post(path, json={**valid, 'consumed_at': '2026-01-04T00:30:00+09:00'})
+        self.assertEqual(offset.status_code, 200, offset.text)
+        self.assertTrue(offset.json()['saved'])
+        self.assertEqual(offset.json()['id'], 1)
+
+    def test_invalid_profile_or_day_rejected(self):
+        path = '/experimental/profiles/98765/meals?day=2026-01-04'
+        self.assertEqual(self.client.get(path).status_code, 404)
+        self.assertEqual(self.client.get(
+            f'/experimental/profiles/{self.profile_id}/meals?day=2026-02-30').status_code, 422)
+        self.assertEqual(self.client.get(
+            '/experimental/profiles/9223372036854775808/meals?day=2026-01-04').status_code, 422)
+        self.assertEqual(self.client.get(
+            f'/experimental/profiles/{self.profile_id}/meals/weekly?day=9999-12-31').status_code, 422)
+
+    def test_fresh_profile_can_read_empty_history_and_totals(self):
+        fresh_db = Path(self.temp.name) / 'fresh-synthetic.sqlite'
+        with patch.dict(os.environ, {'KIDNEY_EXPERIMENTAL_DB': str(fresh_db)}):
+            created = self.client.post('/experimental/profiles', json={
+                'synthetic_only': True, 'name': 'Fresh synthetic profile',
+            })
+            profile_id = created.json()['id']
+            history = self.client.get(f'/experimental/profiles/{profile_id}/meals?day=2026-01-04')
+            totals = self.client.get(f'/experimental/profiles/{profile_id}/meals/daily?day=2026-01-04')
+        self.assertEqual(history.status_code, 200, history.text)
+        self.assertEqual(history.json()['items'], [])
+        self.assertEqual(totals.status_code, 200, totals.text)
+        self.assertEqual(totals.json()['entry_count'], 0)
+
+
 if __name__ == '__main__':
     unittest.main()
