@@ -141,6 +141,15 @@ def _html_table_lines(text: str) -> list[str]:
         # basis exact so conservative header validation remains effective.
         headers = [cell for cell in cells if _header_basis(cell) is not None]
         if headers:
+            if any(
+                cell not in headers and (
+                    re.search(r"\d", cell)
+                    or _SERVING_START.match(cell)
+                    or any(_is_nutrient_start(cell, label) for label, _ in _NUTRIENTS.values())
+                )
+                for cell in cells
+            ):
+                return []
             lines.extend(headers)
         elif len(cells) == 1:
             lines.append(cells[0])

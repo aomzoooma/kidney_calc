@@ -329,6 +329,16 @@ Sodium 10 mg
                 )
                 self.assertTrue(all(item.value is None for item in result.nutrients.values()))
 
+    def test_html_basis_header_row_cannot_hide_nutrient_value(self):
+        result = parse_nutrition_label("""
+<table>
+<tr><td>Serving size 30 g</td></tr>
+<tr><td>Sodium 10 mg</td><td>Nutrition per serving</td></tr>
+<tr><td>Sodium</td><td>80 mg</td></tr>
+</table>
+""")
+        self.assertTrue(all(item.value is None for item in result.nutrients.values()))
+
 
 if __name__ == "__main__":
     unittest.main()
