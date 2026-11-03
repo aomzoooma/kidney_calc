@@ -339,6 +339,16 @@ Sodium 10 mg
 """)
         self.assertTrue(all(item.value is None for item in result.nutrients.values()))
 
+    def test_html_text_outside_cells_and_unsupported_markup_fail_closed(self):
+        for body in (
+            '<tr>Sodium 10 mg</tr><tr><td>Sodium</td><td>80 mg</td></tr>',
+            '<tr><td><b>Sodium</b></td><td>80 mg</td></tr>',
+            '<thead><tr><th>Nutrition per serving</th></tr><tr><td>Sodium</td><td>80 mg</td></tr>',
+        ):
+            with self.subTest(body=body):
+                result = parse_nutrition_label(f'<table>{body}</table>')
+                self.assertTrue(all(item.value is None for item in result.nutrients.values()))
+
 
 if __name__ == "__main__":
     unittest.main()

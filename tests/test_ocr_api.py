@@ -39,6 +39,22 @@ class OCRApiTest(unittest.TestCase):
         self.assertIsNone(suggestions['basis_unit'])
         self.assertTrue(result.json()['suggestions']['requires_human_review'])
 
+    def test_html_text_outside_cells_produces_no_api_suggestion(self):
+        ocr_text = """
+<table>
+<tr><th>Nutrition per serving</th></tr>
+<tr>Sodium 10 mg</tr>
+<tr><td>Sodium</td><td>80 mg</td></tr>
+</table>
+"""
+        with patch('api.main.ocr_image', new=AsyncMock(return_value=OCRResult(ocr_text))):
+            result = self.client.post('/experimental/ocr', json=self.payload)
+        self.assertEqual(result.status_code, 200)
+        suggestions = result.json()['suggestions']
+        self.assertTrue(all(value is None for value in suggestions['nutrients'].values()))
+        self.assertIsNone(suggestions['basis_quantity'])
+        self.assertIsNone(suggestions['basis_unit'])
+
     def test_rejects_bad_input_and_sanitizes_errors(self):
         for payload in ({**self.payload, 'synthetic_only': False}, {**self.payload, 'image_base64': '%%%'}):
             self.assertEqual(self.client.post('/experimental/ocr', json=payload).status_code, 422)
