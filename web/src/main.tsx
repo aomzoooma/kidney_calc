@@ -174,6 +174,7 @@ export function App() {
   const [savedRecipesError, setSavedRecipesError] = useState('')
   const [savedRecipeId, setSavedRecipeId] = useState<number | null>(null)
   const [savedRecipeName, setSavedRecipeName] = useState<string | null>(null)
+  const [pendingRecipeRename, setPendingRecipeRename] = useState<{ id: number; name: string; revision: number } | null>(null)
   const [recipeName, setRecipeName] = useState('')
   const [recipeDraftChanged, setRecipeDraftChanged] = useState(false)
   const [recipeSaveBusy, setRecipeSaveBusy] = useState(false)
@@ -589,7 +590,9 @@ export function App() {
 
   async function openSavedRecipe(recipeId: number) {
     if (recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving) return
-    if (recipeDraftChanged && !window.confirm('เปิดสูตรนี้จะแทนที่รายการและสัดส่วนที่กำลังกรอก หากยังไม่บันทึกให้กดยกเลิกก่อน')) return
+    if (recipeDraftChanged && !window.confirm(pendingRecipeRename
+      ? `ส่วนผสมจากคำขอก่อนหน้าบันทึกแล้ว แต่ชื่อ “${pendingRecipeRename.name}” ยังไม่ยืนยัน · เปิดสูตรนี้จะแทนที่แบบร่างปัจจุบันและยกเลิกการลองบันทึกชื่อนี้`
+      : 'เปิดสูตรนี้จะแทนที่รายการและสัดส่วนที่กำลังกรอก หากยังไม่บันทึกให้กดยกเลิกก่อน')) return
     const requestRevision = revision.current
     setRecipeOpenBusyId(recipeId); setRecipeError(''); setRecipeStatus('')
     try {
@@ -616,6 +619,7 @@ export function App() {
         values: Object.fromEntries(nutrients.map(([key]) => [key, item[key] ?? ''])) as Ingredient['values'],
       })))
       setRecipeName(payload.name); setSavedRecipeName(payload.name); setSavedRecipeId(payload.id)
+      setPendingRecipeRename(null)
       setPortion('1'); setOpenIngredient(0); setResult(null); setError('')
       setRecipeDraftChanged(false); clearUSDAReview()
       setRecipeStatus(`เปิดสูตร “${payload.name}” แล้ว · เปลี่ยนส่วนผสมได้ และกดบันทึกการเปลี่ยนแปลงเมื่อพร้อม`)
@@ -680,14 +684,18 @@ export function App() {
         return [summary, ...current.filter(item => item.id !== id)]
       })
       setSavedRecipeName(name)
+      setPendingRecipeRename(null)
       if (submittedRevision === revision.current) setRecipeDraftChanged(false)
       setRecipeStatus(savedRecipeId === null ? `บันทึกสูตร “${name}” แล้ว` : `บันทึกการเปลี่ยนแปลงของ “${name}” แล้ว`)
     } catch (cause) {
       if (cause instanceof Error && cause.message === 'recipe-source-measure-mismatch') {
         setRecipeError('ปริมาณหรือสภาพอาหารไม่ตรงกับฐานของรายการที่ตรวจไว้ · ใช้หน่วยและสภาพที่แสดงในแถวนี้ ระบบไม่แปลงกรัมเป็นมิลลิลิตร')
       } else {
+        if (ingredientsSaved && savedRecipeId !== null && savedRecipeName !== name) {
+          setPendingRecipeRename({ id: savedRecipeId, name, revision: submittedRevision })
+        }
         setRecipeError(ingredientsSaved
-          ? 'บันทึกส่วนผสมแล้ว แต่เปลี่ยนชื่อสูตรไม่สำเร็จ · ลองบันทึกอีกครั้ง'
+          ? 'บันทึกส่วนผสมแล้ว แต่ยังยืนยันการเปลี่ยนชื่อไม่ได้ · หากถูกจำกัดคำขอ ให้รอ 1 นาทีแล้วกดบันทึกชื่อสูตรที่ค้าง โดยไม่ต้องส่งส่วนผสมซ้ำ'
           : 'บันทึกสูตรไม่สำเร็จ · ตรวจการเชื่อมต่อแล้วลองอีกครั้ง')
       }
     } finally {
@@ -695,11 +703,44 @@ export function App() {
     }
   }
 
+  async function retryRecipeRename() {
+    const pending = pendingRecipeRename
+    if (!pending || recipeSaveBusy) return
+    setRecipeSaveBusy(true); setRecipeError(''); setRecipeStatus('')
+    try {
+      const response = await apiFetch(`/experimental/recipes/${pending.id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ synthetic_only: true, name: pending.name }),
+      })
+      if (!response.ok) {
+        setRecipeError('ยังบันทึกชื่อสูตรไม่ได้ · ส่วนผสมเดิมบันทึกแล้ว · รอสักครู่แล้วกดบันทึกชื่อสูตรที่ค้างอีกครั้ง')
+        return
+      }
+      savedRecipesMutationRevision.current++
+      setSavedRecipes(current => {
+        const summary = { id: pending.id, name: pending.name,
+          favorite: current.find(item => item.id === pending.id)?.favorite ?? false }
+        return [summary, ...current.filter(item => item.id !== pending.id)]
+      })
+      setSavedRecipeName(pending.name)
+      setPendingRecipeRename(null)
+      if (pending.revision === revision.current) setRecipeDraftChanged(false)
+      setRecipeStatus(`บันทึกชื่อสูตร “${pending.name}” แล้ว · กดบันทึกก่อนหน้านี้ได้บันทึกส่วนผสมแล้ว`)
+    } catch {
+      setRecipeError('ยังยืนยันการบันทึกชื่อสูตรไม่ได้ · ส่วนผสมเดิมบันทึกแล้ว · กดบันทึกชื่อสูตรที่ค้างอีกครั้ง')
+    } finally {
+      setRecipeSaveBusy(false)
+    }
+  }
+
   function startNewRecipe() {
     if (recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving) return
-    if (recipeDraftChanged && !window.confirm('เริ่มสูตรใหม่จะล้างรายการและสัดส่วนที่กำลังกรอก หากยังไม่บันทึกให้กดยกเลิกก่อน')) return
+    if (recipeDraftChanged && !window.confirm(pendingRecipeRename
+      ? `ส่วนผสมจากคำขอก่อนหน้าบันทึกแล้ว แต่ชื่อ “${pendingRecipeRename.name}” ยังไม่ยืนยัน · เริ่มสูตรใหม่จะล้างแบบร่างปัจจุบันและยกเลิกการลองบันทึกชื่อนี้`
+      : 'เริ่มสูตรใหม่จะล้างรายการและสัดส่วนที่กำลังกรอก หากยังไม่บันทึกให้กดยกเลิกก่อน')) return
     revision.current++
     setIngredients([newIngredient()]); setRecipeName(''); setSavedRecipeId(null); setSavedRecipeName(null)
+    setPendingRecipeRename(null)
     setPortion('1'); setOpenIngredient(0); setResult(null); setError(''); clearUSDAReview()
     setRecipeDraftChanged(false); setRecipeStatus('เริ่มสูตรใหม่แล้ว'); setRecipeError('')
   }
@@ -979,7 +1020,9 @@ export function App() {
           </div>)}
           <section className="usda-search" aria-labelledby="save-recipe-title">
             <h2 id="save-recipe-title">บันทึกสูตรของฉัน</h2>
-            {savedRecipeId !== null && <p>กำลังแก้สูตรที่บันทึกไว้ · การแก้ไขในหน้านี้ยังไม่ถูกบันทึก</p>}
+            {savedRecipeId !== null && <p>{pendingRecipeRename
+              ? `คำขอก่อนหน้าบันทึกส่วนผสมแล้ว · ชื่อสูตร “${pendingRecipeRename.name}” ยังไม่ยืนยัน`
+              : 'กำลังแก้สูตรที่บันทึกไว้ · การแก้ไขในหน้านี้ยังไม่ถูกบันทึก'}</p>}
             <label htmlFor="recipe-name">ชื่อสูตร <input id="recipe-name" disabled={recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving === true} value={recipeName} maxLength={150} autoComplete="off" onChange={event => {
               if (recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving) return
               revision.current++; setRecipeName(event.target.value); setRecipeDraftChanged(true); setRecipeStatus(''); setRecipeError('')
@@ -988,6 +1031,7 @@ export function App() {
             {recipeUsesReviewedIngredients && !recipeAmountsValid && <p role="note">กรอกปริมาณที่มากกว่าศูนย์ในทุกวัตถุดิบก่อนบันทึก</p>}
             {recipeUsesReviewedIngredients && recipeAmountsValid && !recipeName.trim() && <p role="note">ใส่ชื่อสูตรก่อนบันทึก</p>}
             <button type="button" className="submit-button" disabled={!canSaveRecipe || recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || recipeFavoriteBusyId !== null || usdaReview?.saving === true} onClick={() => void saveRecipe()}>{recipeSaveBusy ? 'กำลังบันทึก…' : savedRecipeId === null ? 'บันทึกสูตร' : 'บันทึกการเปลี่ยนแปลง'}</button>
+            {pendingRecipeRename && <button type="button" className="add-button" disabled={recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null} onClick={() => void retryRecipeRename()}>บันทึกชื่อ “{pendingRecipeRename.name}” ที่ค้าง</button>}
           </section>
           <section className="portion-card"><label htmlFor="portion">สัดส่วนของสูตรที่รับประทาน</label><div><input id="portion" disabled={recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving === true} required inputMode="decimal" type="number" min="0.00000001" max="1" step="any" value={portion} onChange={e => { if (recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving) return; revision.current++; setRecipeDraftChanged(true); setPortion(e.target.value); setResult(null) }} /><span>0.5 = ครึ่งสูตร · 1 = สูตรทั้งหมด</span></div></section>
           <label className="attestation"><input type="checkbox" required /> ยืนยันว่ากำลังทดสอบด้วยสูตรสมมติ ไม่ใช่อาหารหรือข้อมูลผู้ป่วยจริง</label>

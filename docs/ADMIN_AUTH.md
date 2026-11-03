@@ -55,7 +55,7 @@ npm run dev -- --host 127.0.0.1
 3. เมื่อ ack ผ่านจึงแสดง planner · session ใช้งานได้ 8 ชั่วโมง และมีผู้ดูแลที่ active ได้ครั้งละหนึ่ง browser
 4. กด “ออกจากระบบ” เพื่อลบสิทธิ์ session บน backend · หากย้ายเครื่อง ต้องออกจากระบบที่เครื่องเดิมก่อน
 
-รหัสผ่านอยู่ใน input/request ระหว่างล็อกอินเท่านั้น · หน้าเว็บไม่เขียน credential, token หรือ cookie ลง Web Storage · cookie เป็น `SameSite=Strict` และ `HttpOnly` · การเขียนข้อมูลใช้ one-time CSRF token purpose `write`; logout ใช้ token แยก purpose `logout` เพื่อให้ยังออกจากระบบได้เมื่อ token สำหรับเขียนหมดโควตาหรือค้างอยู่ · ทั้งคู่ตรวจ exact Origin/Host
+รหัสผ่านอยู่ใน input/request ระหว่างล็อกอินเท่านั้น · หน้าเว็บไม่เขียน credential, token หรือ cookie ลง Web Storage · cookie เป็น `SameSite=Strict` และ `HttpOnly` · การเขียนข้อมูลใช้ one-time CSRF token purpose `write`; logout ใช้ token แยก purpose `logout` เพื่อให้ยังออกจากระบบได้เมื่อ token สำหรับเขียนหมดโควตาหรือค้างอยู่ · การขอ logout token ใหม่จะแทนที่ token เก่าที่ยังไม่ใช้ใน session/client เดียวกัน · token เก่าใช้ซ้ำไม่ได้ · ทั้งคู่ตรวจ exact Origin/Host
 
 ## กู้คืนเมื่อยืนยันค้าง
 

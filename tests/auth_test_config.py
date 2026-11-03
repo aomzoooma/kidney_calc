@@ -54,8 +54,9 @@ class AuthTestClient(TestClient):
         unsafe = method.upper() not in ("GET", "HEAD", "OPTIONS")
         guarded = path.startswith("/experimental/") or path == "/auth/logout"
         headers = dict(kwargs.pop("headers", {}) or {})
-        if self._authenticated and self.auto_csrf and unsafe and guarded:
+        if (self._authenticated and self.auto_csrf and unsafe and guarded
+                and "x-csrf-token" not in {key.lower() for key in headers}):
             purpose = "logout" if path == "/auth/logout" else "write"
-            headers.setdefault("x-csrf-token", self.get("/auth/csrf", params={"purpose": purpose}).json()["csrf_token"])
+            headers["x-csrf-token"] = self.get("/auth/csrf", params={"purpose": purpose}).json()["csrf_token"]
         kwargs["headers"] = headers
         return super().request(method, url, **kwargs)

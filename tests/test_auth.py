@@ -33,6 +33,35 @@ class AuthPrimitiveTest(unittest.TestCase):
         self.assertIsNone(sessions.issue_csrf(None, "login", "127.0.0.1"))
         self.assertIsNotNone(sessions.issue_csrf(None, "login", "::1"))
 
+    def test_logout_nonce_replacement_is_session_client_scoped_and_single_use(self):
+        sessions = AuthSessions()
+        nonce = sessions.issue_csrf(None, "login")
+        ticket = sessions.prepare_login(nonce, None, sessions.begin_login())
+        issued, ack = sessions.confirm_login(ticket, nonce, 100)
+        self.assertTrue(sessions.acknowledge(issued.session_id, issued.expires_at, ack))
+        first = sessions.issue_csrf(issued.session_id, "logout", "127.0.0.1")
+        other_client = sessions.issue_csrf(issued.session_id, "logout", "::1")
+        replacements = [sessions.issue_csrf(issued.session_id, "logout", "127.0.0.1")
+                        for _ in range(10)]
+        self.assertTrue(all(replacements))
+        self.assertFalse(sessions.consume_logout_nonce(first, issued.session_id))
+        self.assertTrue(sessions.consume_logout_nonce(other_client, issued.session_id))
+        self.assertTrue(sessions.consume_logout_nonce(replacements[-1], issued.session_id))
+        self.assertFalse(sessions.consume_logout_nonce(replacements[-1], issued.session_id))
+
+    def test_concurrent_logout_nonce_issuance_keeps_one_replay_safe_token(self):
+        sessions = AuthSessions()
+        nonce = sessions.issue_csrf(None, "login")
+        ticket = sessions.prepare_login(nonce, None, sessions.begin_login())
+        issued, ack = sessions.confirm_login(ticket, nonce, 100)
+        self.assertTrue(sessions.acknowledge(issued.session_id, issued.expires_at, ack))
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            tokens = list(pool.map(lambda _: sessions.issue_csrf(issued.session_id, "logout"), range(8)))
+        self.assertTrue(all(tokens))
+        valid = [sessions.consume_logout_nonce(token, issued.session_id) for token in tokens]
+        self.assertEqual(valid.count(True), 1)
+        self.assertEqual(sum(sessions.consume_logout_nonce(token, issued.session_id) for token in tokens), 0)
+
     def test_limiter_reserves_before_verify_caps_concurrency_and_expires(self):
         now = [100.0]
         limiter = AuthLimiter(max_attempts=5, window_seconds=10, max_in_flight=2,
@@ -215,6 +244,24 @@ class AuthApiTest(unittest.TestCase):
         logout_token = self.token(purpose="logout")
         self.assertEqual(self.client.post("/auth/logout", headers={
             "x-csrf-token": logout_token,
+        }).status_code, 204)
+
+    def test_repeated_logout_bootstraps_replace_stranded_tokens(self):
+        self.client.login()
+        now = [0.0]
+        main._auth_logout_csrf_limiter = AuthCsrfLimiter(
+            max_requests=8, window_seconds=60, clock=lambda: now[0])
+        tokens = [self.token(purpose="logout") for _ in range(8)]
+        self.assertEqual(self.client.get("/auth/csrf", params={"purpose": "logout"}).status_code, 429)
+        now[0] += 60
+        replacement = self.token(purpose="logout")
+        self.client.auto_csrf = False
+        for token in tokens:
+            self.assertEqual(self.client.post("/auth/logout", headers={
+                "x-csrf-token": token,
+            }).status_code, 403)
+        self.assertEqual(self.client.post("/auth/logout", headers={
+            "x-csrf-token": replacement,
         }).status_code, 204)
 
     def test_logout_nonce_rejects_cross_origin_and_replay(self):

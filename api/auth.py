@@ -210,13 +210,6 @@ class AuthSessions:
         now = int(self._clock())
         with self._lock:
             self._prune(now)
-            if len(self._csrf) >= self._CSRF_MAX:
-                return None
-            scope_tokens = sum(1 for entry in self._csrf.values()
-                               if entry[0] == session_id and entry[2] == purpose
-                               and entry[3] == client_key)
-            if scope_tokens >= self._CSRF_PER_SCOPE_MAX:
-                return None
             if purpose == "login":
                 if self._current is not None and not self._current.acknowledged:
                     return None
@@ -230,7 +223,23 @@ class AuthSessions:
                         or self._current.session_id != session_id):
                     return None
                 kind = purpose
+                if purpose == "logout":
+                    replace_count = sum(1 for entry in self._csrf.values()
+                                        if entry[0] == session_id and entry[2] == "logout"
+                                        and entry[3] == client_key)
+                    if len(self._csrf) - replace_count >= self._CSRF_MAX:
+                        return None
+                    self._csrf = {key: entry for key, entry in self._csrf.items()
+                                  if not (entry[0] == session_id and entry[2] == "logout"
+                                          and entry[3] == client_key)}
             else:
+                return None
+            if len(self._csrf) >= self._CSRF_MAX:
+                return None
+            scope_tokens = sum(1 for entry in self._csrf.values()
+                               if entry[0] == session_id and entry[2] == purpose
+                               and entry[3] == client_key)
+            if scope_tokens >= self._CSRF_PER_SCOPE_MAX:
                 return None
             token = secrets.token_urlsafe(32)
             self._csrf[self._digest(token)] = (session_id, now + self._CSRF_TTL, kind, client_key)
