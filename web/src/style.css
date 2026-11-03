@@ -17,6 +17,24 @@ button, select, input { min-height: 46px; }
 button { cursor: pointer; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #66a989; outline-offset: 2px; }
 .app-shell { min-height: 100vh; display: flex; flex-direction: column; }
+.auth-screen { display: grid; align-content: center; width: min(100%, 34rem); min-height: 100svh; margin: auto; padding: clamp(1rem, 5vw, 2rem); }
+.auth-panel { padding: clamp(1rem, 5vw, 2rem); background: #fff; border: 1px solid var(--line); border-radius: 1rem; }
+.auth-panel h1 { margin-top: 0; }
+.auth-panel form { margin-top: 1.25rem; }
+.auth-panel form label { margin: 1rem 0; }
+.auth-panel form input { margin-top: .35rem; }
+.auth-retry-button { width: 100%; min-height: 48px; margin-top: 1rem; padding: .55rem .75rem; color: var(--green); background: #fff; border: 1px solid #b9d0c2; border-radius: .7rem; font-weight: 700; }
+.auth-setup { margin-top: 1.3rem; padding-top: .85rem; border-top: 1px solid var(--line); }
+.auth-setup summary { min-height: 2.8rem; padding: .45rem 0; color: var(--green); font-weight: 750; cursor: pointer; }
+.auth-setup p { margin: .7rem 0; font-size: .92rem; overflow-wrap: anywhere; }
+.auth-recovery { padding: .75rem; background: #fff8e9; border: 1px solid #d8b976; border-radius: .7rem; }
+.demo-mode-banner { margin: 0; padding: .65rem 1rem; color: #174b38; background: #e8f2eb; border-bottom: 1px solid #c8dbce; text-align: center; font-size: .9rem; font-weight: 700; }
+.auth-session-bar { display: flex; align-items: center; justify-content: flex-end; gap: .8rem; padding: .35rem max(1rem, calc((100vw - 52rem) / 2)); color: var(--green); background: #fff; border-bottom: 1px solid var(--line); font-size: .85rem; }
+.auth-session-bar button { min-height: 42px; padding: .4rem .75rem; color: var(--green); background: #fff; border: 1px solid #b9d0c2; border-radius: .65rem; font-weight: 700; }
+.auth-session-bar button:disabled { opacity: .65; cursor: wait; }
+.auth-session-error { max-width: 52rem; margin: .5rem auto; padding: .5rem 1rem; color: #812e22; background: #fff0ed; border-radius: .65rem; }
+.auth-panel details:focus-within, .auth-panel summary:focus-visible { outline: 3px solid #66a989; outline-offset: 2px; }
+.auth-panel input:focus-visible { outline-color: #287d55; }
 .topbar { background: #fff; border-bottom: 1px solid var(--line); }
 .brand { display: block; max-width: 48rem; margin: auto; padding: .65rem 1rem; color: var(--green); text-decoration: none; font-weight: 800; }
 .brand span { color: var(--muted); margin-left: .4rem; font-size: .78rem; font-weight: 500; }

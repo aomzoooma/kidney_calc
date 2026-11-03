@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { apiFetch } from './authClient'
 import { nutrients, type NutrientKey } from './request'
 
 type SavedSeasoning = {
@@ -129,7 +130,7 @@ export function OcrPreview() {
 
   async function loadSaved(signal?: AbortSignal) {
     try {
-      const response = await fetch('/experimental/seasonings', { signal })
+      const response = await apiFetch('/experimental/seasonings', { signal })
       const result: unknown = await response.json().catch(() => null)
       if (!response.ok || !isSavedSeasoningResponse(result)) throw new Error('saved seasonings unavailable')
       setSaved(result.items)
@@ -168,7 +169,7 @@ export function OcrPreview() {
       for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192))
       controller = new AbortController()
       pending.current = controller
-      const response = await fetch('/experimental/ocr', {
+      const response = await apiFetch('/experimental/ocr', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ synthetic_only: true, content_type: file.type, image_base64: btoa(binary) }),
         signal: controller.signal,
@@ -222,7 +223,7 @@ export function OcrPreview() {
     const submitted = { ...form, values: { ...form.values } }
     setError(''); setSaveMessage(''); setSaving(true)
     try {
-      const response = await fetch('/experimental/seasonings', {
+      const response = await apiFetch('/experimental/seasonings', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           synthetic_only: true,

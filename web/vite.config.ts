@@ -1,18 +1,20 @@
 import { defineConfig } from 'vite'
+import { allowsSameOriginApiProxy } from './src/proxySecurity'
 
 export default defineConfig({
   plugins: [{
     name: 'restrict-experimental-origin',
     configureServer(server) {
-      server.middlewares.use('/experimental', (request, response, next) => {
-        const origin = request.headers.origin
-        if (origin && origin !== `http://${request.headers.host}`) {
-          response.statusCode = 403
-          response.end('Origin not allowed')
-          return
-        }
-        next()
-      })
+      for (const prefix of ['/experimental', '/auth']) {
+        server.middlewares.use(prefix, (request, response, next) => {
+          if (!allowsSameOriginApiProxy(request.headers as Record<string, string | undefined>)) {
+            response.statusCode = 403
+            response.end('Origin not allowed')
+            return
+          }
+          next()
+        })
+      }
     },
   }],
   server: {
@@ -21,7 +23,20 @@ export default defineConfig({
       '/experimental': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
-        configure: proxy => proxy.on('proxyReq', request => request.setHeader('origin', 'http://127.0.0.1:8000')),
+        configure: proxy => proxy.on('proxyReq', (proxyRequest, incomingRequest) => {
+          proxyRequest.setHeader('origin', 'http://127.0.0.1:8000')
+          const fetchSite = incomingRequest.headers['sec-fetch-site']
+          if (fetchSite) proxyRequest.setHeader('sec-fetch-site', fetchSite)
+        }),
+      },
+      '/auth': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+        configure: proxy => proxy.on('proxyReq', (proxyRequest, incomingRequest) => {
+          proxyRequest.setHeader('origin', 'http://127.0.0.1:8000')
+          const fetchSite = incomingRequest.headers['sec-fetch-site']
+          if (fetchSite) proxyRequest.setHeader('sec-fetch-site', fetchSite)
+        }),
       },
     },
   },

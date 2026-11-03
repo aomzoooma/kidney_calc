@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { apiFetch } from './authClient'
 import { nutrients, type Ingredient, type NutrientKey } from './request'
 
 type Props = {
@@ -37,7 +38,7 @@ export function RecipeIngredientSnapshotForm({ ingredient, disabled, onBusyChang
     if (!canSave) return
     setBusy(true); onErrorChange(''); onBusyChange(true)
     try {
-      const response = await fetch('/experimental/ingredients', {
+      const response = await apiFetch('/experimental/ingredients', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           synthetic_only: true, reviewed: true, name: ingredient.name.trim(), provider: provider.trim(),

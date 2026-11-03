@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
+from auth_test_config import AuthTestClient
 from api.main import app, _demo_store, _suggestions
 from api.ocr import OCRResult
 from nutrition.seasonings import SeasoningStore
@@ -19,7 +20,7 @@ class SeasoningApiTest(unittest.TestCase):
         self.env = patch.dict('os.environ', {'KIDNEY_EXPERIMENTAL_DB': str(Path(self.tmp.name) / 'demo.db')})
         self.env.start()
         self.addCleanup(self.env.stop)
-        self.client = TestClient(app, client=('127.0.0.1', 1234), base_url='http://127.0.0.1')
+        self.client = AuthTestClient(app)
         self.payload = {'synthetic_only': True, 'reviewed': True, 'name': 'ตัวอย่าง', 'brand': None,
                         'basis_quantity': '15', 'basis_unit': 'ml',
                         'nutrients': {'sodium_mg': '0', 'protein_g': None}}

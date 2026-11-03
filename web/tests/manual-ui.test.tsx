@@ -807,6 +807,42 @@ describe('manual recipe UI', () => {
     expect(JSON.parse(String(renameCall?.[1]?.body))).toEqual({ synthetic_only: true, name: 'ข้าวต้มของฉัน' })
   })
 
+  it('offers name-only recovery when ingredient save succeeds but rename fails', async () => {
+    const detail = { id: 7, name: 'ข้าวต้ม', favorite: false, ingredients: [{
+      ingredient_version_id: 24, amount: '60', unit: 'g', food_state: 'cooked', ingredient_name: 'ข้าวสวย',
+      basis_quantity: '100', basis_unit: 'g', reviewed: true, energy_kcal: null, protein_g: '2', sodium_mg: '1', potassium_mg: null, phosphorus_mg: null,
+    }] }
+    let renameAttempts = 0
+    const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/experimental/recipes') return { ok: true, json: async () => ({ items: [{ id: 7, name: 'ข้าวต้ม', favorite: false }] }) }
+      if (url === '/experimental/seasonings') return { ok: true, json: async () => ({ items: [] }) }
+      if (url === '/experimental/recipes/7/ingredients' && options?.method === 'PUT') return { ok: true, json: async () => ({ ingredients_updated: true }) }
+      if (url === '/experimental/recipes/7' && options?.method === 'PATCH') {
+        const payload = JSON.parse(String(options.body))
+        if ('name' in payload && renameAttempts++ === 0) return { ok: false, status: 429, json: async () => ({}) }
+        return { ok: true, json: async () => ({ updated: true }) }
+      }
+      if (url === '/experimental/recipes/7') return { ok: true, json: async () => detail }
+      return { ok: true, json: async () => response }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    fireEvent.click(await screen.findByRole('button', { name: 'เปิดสูตรนี้' }))
+    await screen.findByDisplayValue('ข้าวต้ม')
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-ingredient-index="0"] .field-grid input[type="number"]')!, { target: { value: '75' } })
+    fireEvent.change(screen.getByLabelText('ชื่อสูตร'), { target: { value: 'ข้าวต้มของฉัน' } })
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการเปลี่ยนแปลง' }))
+
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    expect(screen.getByText(/คำขอก่อนหน้าบันทึกส่วนผสมแล้ว/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกชื่อ “ข้าวต้มของฉัน” ที่ค้าง' }))
+    expect(await screen.findByText(/บันทึกชื่อสูตร “ข้าวต้มของฉัน” แล้ว/)).toBeTruthy()
+    expect(fetchMock.mock.calls.filter(([url, options]) => url === '/experimental/recipes/7/ingredients' && options?.method === 'PUT')).toHaveLength(1)
+    expect(fetchMock.mock.calls.filter(([url, options]) => url === '/experimental/recipes/7' && options?.method === 'PATCH'
+      && 'name' in JSON.parse(String(options?.body)))).toHaveLength(2)
+  })
+
   it('keeps an unsaved draft when opening a saved recipe is cancelled', async () => {
     const fetchMock = vi.fn(async (url: string) => url === '/experimental/recipes'
       ? { ok: true, json: async () => ({ items: [{ id: 7, name: 'ข้าวต้ม', favorite: true }] }) }
