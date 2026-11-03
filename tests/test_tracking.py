@@ -81,6 +81,27 @@ class MealTrackingStoreTest(unittest.TestCase):
         self.assertEqual(entry["totals"]["protein_g"], (Decimal("5.0"), True))
         self.assertEqual(entry["totals"]["sodium_mg"], (Decimal("0.0"), True))
 
+    def test_list_entries_filters_local_day_and_bounds_results(self):
+        first = self.tracking.record_consumption(
+            self.profile_id, self.recipe_ids[0],
+            datetime(2026, 1, 3, 17, 30, tzinfo=timezone.utc), Decimal("0.25"),
+        )
+        second = self.tracking.record_consumption(
+            self.profile_id, self.recipe_ids[0],
+            datetime(2026, 1, 3, 18, 30, tzinfo=timezone.utc), Decimal("0.5"),
+        )
+        self.tracking.record_consumption(
+            self.profile_id, self.recipe_ids[0],
+            datetime(2026, 1, 4, 18, 1, tzinfo=timezone.utc), Decimal("1"),
+        )
+        listed = self.tracking.list_entries(self.profile_id, date(2026, 1, 4), limit=1)
+        self.assertEqual([entry["id"] for entry in listed], [second])
+        self.assertEqual(listed[0]["portion"], Decimal("0.5"))
+        self.assertEqual(self.tracking.list_entries(self.profile_id, date(2026, 1, 3)), [])
+        with self.assertRaises(ValueError):
+            self.tracking.list_entries(self.profile_id, date(2026, 1, 4), limit=101)
+        self.assertIsNotNone(self.tracking.get_entry(first))
+
     def test_daily_and_iso_week_totals_use_bangkok_day_and_propagate_unknown(self):
         # 16:59 UTC is 23:59 Sunday in Bangkok; 17:01 UTC is Monday 00:01.
         self.tracking.record_consumption(

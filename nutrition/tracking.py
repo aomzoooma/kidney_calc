@@ -417,6 +417,24 @@ class MealTrackingStore:
                 },
             }
 
+    def list_entries(self, profile_id: int, day: date, limit: int = 50) -> list[dict]:
+        """Return a bounded, newest-first page of sealed entries for one Bangkok civil day."""
+        profile_id = _positive_id(profile_id, "profile_id")
+        day_text = _day(day)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("limit must be an integer between 1 and 100")
+        with self._connect() as db:
+            if db.execute("SELECT 1 FROM patient_profiles WHERE id = ?", (profile_id,)).fetchone() is None:
+                raise LookupError("profile not found")
+            rows = db.execute(
+                """SELECT e.id FROM meal_entries e
+                   JOIN meal_entry_seals s ON s.meal_entry_id = e.id
+                   WHERE e.profile_id = ? AND e.local_date = ?
+                   ORDER BY e.consumed_at_utc DESC, e.id DESC LIMIT ?""",
+                (profile_id, day_text, limit),
+            ).fetchall()
+        return [self.get_entry(row["id"]) for row in rows]
+
     def _period_totals(self, profile_id: int, start: date, end: date) -> dict:
         profile_id = _positive_id(profile_id, "profile_id")
         start_text, end_text = _day(start), _day(end)
