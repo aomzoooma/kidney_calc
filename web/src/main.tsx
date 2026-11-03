@@ -24,6 +24,7 @@ type SavedRecipeIngredient = {
   source_reference?: string; provenance?: string;
 } & Record<NutrientKey, string | null>
 type SavedRecipeDetail = SavedRecipeSummary & { ingredients: SavedRecipeIngredient[] }
+const uncertainRecentWriteMessage = 'ไม่ทราบว่าประวัติการเปิดครั้งล่าสุดบันทึกแล้วหรือไม่ · หยุดบันทึกต่อในแท็บนี้เพื่อรักษาลำดับ · ลำดับข้ามแท็บหรืออุปกรณ์อื่นไม่รับประกัน · สูตรยังเปิดได้ตามปกติ'
 type USDAIngredientPreview = {
   fdc_id: number; name: string; source_type: 'Foundation' | 'SR Legacy'; source_version: string | null;
   source_date: string | null; food_state: 'raw' | 'cooked'; basis_quantity: '100'; basis_unit: 'g';
@@ -85,6 +86,28 @@ function isRecentRecipe(value: unknown): value is RecentRecipe {
 
 function formatRecentOpenedAt(value: string): string {
   return new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Bangkok' }).format(new Date(value))
+}
+
+async function fetchRecentHistory(url: string, init: RequestInit = {}): Promise<{ ok: boolean; status: number; payload: unknown }> {
+  const controller = new AbortController()
+  let timeout: number | undefined
+  try {
+    return await Promise.race([
+      (async () => {
+        const response = await fetch(url, { ...init, signal: controller.signal })
+        const payload = await response.json()
+        return { ok: response.ok, status: response.status, payload: payload as unknown }
+      })(),
+      new Promise<{ ok: boolean; status: number; payload: unknown }>((_resolve, reject) => {
+        timeout = window.setTimeout(() => {
+          controller.abort()
+          reject(new Error('Recent recipe history request timed out'))
+        }, 5000)
+      }),
+    ])
+  } finally {
+    if (timeout !== undefined) window.clearTimeout(timeout)
+  }
 }
 
 function isSavedRecipeDetail(value: unknown): value is SavedRecipeDetail {
@@ -185,6 +208,7 @@ export function App() {
   const recentRecipesLoadRequest = useRef(0)
   const recentOpenSequence = useRef(0)
   const recentOpenQueue = useRef<Promise<void>>(Promise.resolve())
+  const recentOpenWritesPaused = useRef(false)
   const savedSearchRevision = useRef(0)
   const usdaSearchRevision = useRef(0)
   const queryTranslationRevision = useRef(0)
@@ -507,23 +531,29 @@ export function App() {
 
   async function loadRecentRecipes(openSequence?: number) {
     const requestId = ++recentRecipesLoadRequest.current
-    const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const focusedRecipeId = focused?.closest<HTMLElement>('[data-recent-recipe-id]')?.dataset.recentRecipeId
     setRecentRecipesBusy(true)
     try {
-      const response = await fetch('/experimental/recipes/recent')
-      const payload = await response.json()
-      if (!response.ok || !Array.isArray(payload.items)) throw new Error('Recent recipes unavailable')
+      const { ok, payload } = await fetchRecentHistory('/experimental/recipes/recent')
+      if (!ok || !payload || typeof payload !== 'object' || !Array.isArray((payload as { items?: unknown }).items)) throw new Error('Recent recipes unavailable')
       if (requestId !== recentRecipesLoadRequest.current || (openSequence !== undefined && openSequence !== recentOpenSequence.current)) return
-      const items = (payload.items as unknown[]).filter(isRecentRecipe).slice(0, 10)
+      const items = ((payload as { items: unknown[] }).items).filter(isRecentRecipe).slice(0, 10)
+      const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+      const focusedRecipeId = focused?.closest<HTMLElement>('[data-recent-recipe-id]')?.dataset.recentRecipeId
+      const restoreFocus = Boolean(focusedRecipeId && !items.some(item => String(item.recipe_id) === focusedRecipeId))
       setRecentRecipes(items)
-      setRecentRecipesError('')
-      if (focusedRecipeId && !items.some(item => String(item.recipe_id) === focusedRecipeId)) {
-        requestAnimationFrame(() => recentRecipesHeadingRef.current?.focus())
+      setRecentRecipesError(recentOpenWritesPaused.current ? uncertainRecentWriteMessage : '')
+      if (restoreFocus && focused) {
+        requestAnimationFrame(() => {
+          if (document.activeElement === focused || document.activeElement === document.body) {
+            recentRecipesHeadingRef.current?.focus()
+          }
+        })
       }
     } catch {
       if (requestId === recentRecipesLoadRequest.current && (openSequence === undefined || openSequence === recentOpenSequence.current)) {
-        setRecentRecipesError('โหลดเมนูที่เปิดล่าสุดไม่ได้ · ลองโหลดรายการอีกครั้ง')
+        setRecentRecipesError(recentOpenWritesPaused.current
+          ? `${uncertainRecentWriteMessage} · รายการล่าสุดโหลดไม่ได้`
+          : 'โหลดเมนูที่เปิดล่าสุดไม่ได้ · ลองโหลดรายการอีกครั้ง')
       }
     } finally {
       if (requestId === recentRecipesLoadRequest.current) setRecentRecipesBusy(false)
@@ -531,20 +561,26 @@ export function App() {
   }
 
   function recordRecentRecipeOpen(recipeId: number) {
+    if (recentOpenWritesPaused.current) {
+      setRecentRecipesError(uncertainRecentWriteMessage)
+      return
+    }
     const sequence = ++recentOpenSequence.current
     setRecentRecipesError('')
-    recentOpenQueue.current = recentOpenQueue.current.catch(() => undefined).then(async () => {
+    recentOpenQueue.current = recentOpenQueue.current.then(async () => {
+      if (recentOpenWritesPaused.current) {
+        return
+      }
       try {
-        const response = await fetch(`/experimental/recipes/${recipeId}/open`, {
+        const { ok } = await fetchRecentHistory(`/experimental/recipes/${recipeId}/open`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ synthetic_only: true }),
         })
-        if (!response.ok) throw new Error('Recent recipe open unavailable')
-        if (sequence === recentOpenSequence.current) await loadRecentRecipes(sequence)
+        if (!ok) throw new Error('Recent recipe open unavailable')
+        if (sequence === recentOpenSequence.current) void loadRecentRecipes(sequence)
       } catch {
-        if (sequence === recentOpenSequence.current) {
-          setRecentRecipesError('บันทึกประวัติการเปิดเมนูไม่สำเร็จ · สูตรยังเปิดและแก้ไขได้ตามปกติ')
-        }
+        recentOpenWritesPaused.current = true
+        setRecentRecipesError(uncertainRecentWriteMessage)
       }
     })
   }
@@ -812,7 +848,7 @@ export function App() {
         <aside className="notice" role="note"><span className="notice-mark" aria-hidden="true">!</span><div><h2>ใช้ตัวเลขสมมติเท่านั้น</h2><p>ห้ามใช้ค่าจากฉลากอาหารจริงหรือข้อมูลผู้ป่วย ผลนี้ใช้ตัดสินใจด้านอาหารหรือการรักษาไม่ได้</p><p>ห้ามใส่ข้อมูลผู้ป่วยในคำค้น USDA · คำค้นถูกส่งออกจากเครื่อง</p></div></aside>
         <section className="usda-search recent-menu-history" aria-labelledby="recent-menu-title">
           <h2 id="recent-menu-title" ref={recentRecipesHeadingRef} tabIndex={-1}>เมนูที่เปิดล่าสุด</h2>
-          <p>ประวัติการเปิดสูตรที่บันทึกไว้ · ไม่ใช่บันทึกการปรุงหรือการรับประทาน</p>
+          <p>ประวัติการเปิดสูตรที่บันทึกไว้ · ไม่ใช่บันทึกการปรุงหรือการรับประทาน · ลำดับอาจคลาดเคลื่อนเมื่อเปิดพร้อมกันหลายแท็บหรืออุปกรณ์</p>
           {recentRecipesBusy && <p role="status" aria-live="polite">กำลังโหลดเมนูที่เปิดล่าสุด…</p>}
           {recentRecipesError && <p className="error" role="status">{recentRecipesError} <button type="button" className="thai-query-choice" onClick={() => void loadRecentRecipes()}>โหลดอีกครั้ง</button></p>}
           {!recentRecipesBusy && !recentRecipesError && recentRecipes.length === 0 && <p>ยังไม่มีประวัติการเปิดเมนู</p>}

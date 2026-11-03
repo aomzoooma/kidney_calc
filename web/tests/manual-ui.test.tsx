@@ -556,6 +556,7 @@ describe('manual recipe UI', () => {
     expect(screen.getByText('เมนูลำดับ 10')).toBeTruthy()
     expect(screen.queryByText('เมนูลำดับ 11')).toBeNull()
     expect(screen.getByText(/ไม่ใช่บันทึกการปรุงหรือการรับประทาน/)).toBeTruthy()
+    expect(screen.getByText(/ลำดับอาจคลาดเคลื่อนเมื่อเปิดพร้อมกันหลายแท็บหรืออุปกรณ์/)).toBeTruthy()
     fireEvent.click(await screen.findByRole('button', { name: 'เมนูโปรด (1)' }))
     expect(screen.getByText('เมนูลำดับ 1')).toBeTruthy()
     const recentSection = screen.getByRole('region', { name: 'เมนูที่เปิดล่าสุด' })
@@ -604,8 +605,82 @@ describe('manual recipe UI', () => {
     openRecipes()
     fireEvent.click(await screen.findByRole('button', { name: 'เปิดสูตรนี้' }))
     expect(await screen.findByDisplayValue('เมนูที่เปิดได้')).toBeTruthy()
-    expect(await screen.findByText(/บันทึกประวัติการเปิดเมนูไม่สำเร็จ/)).toBeTruthy()
+    expect(await screen.findByText(/ไม่ทราบว่าประวัติการเปิดครั้งล่าสุดบันทึกแล้วหรือไม่/)).toBeTruthy()
     expect(fetchMock.mock.calls.some(([url, options]) => url === '/experimental/recipes/7/open' && options?.method === 'POST')).toBe(true)
+  })
+
+  it('bounds a hung recent-list read without delaying recipe opening', async () => {
+    const detail = { id: 7, name: 'สูตรยังเปิดได้', favorite: false, ingredients: [{
+      ingredient_version_id: 24, amount: '60', unit: 'g', food_state: 'cooked', ingredient_name: 'ข้าวสมมติ',
+      basis_quantity: '100', basis_unit: 'g', reviewed: true, energy_kcal: null, protein_g: '2', sodium_mg: '1', potassium_mg: null, phosphorus_mg: null,
+    }] }
+    let recentSignal: AbortSignal | null = null
+    const fetchMock = vi.fn((url: string, options?: RequestInit) => {
+      if (url === '/experimental/recipes') return Promise.resolve({ ok: true, json: async () => ({ items: [{ id: 7, name: 'สูตรยังเปิดได้', favorite: false }] }) })
+      if (url === '/experimental/recipes/recent') {
+        recentSignal = options?.signal ?? null
+        return Promise.resolve({ ok: true, status: 200, json: () => new Promise(() => undefined) })
+      }
+      if (url === '/experimental/recipes/7') return Promise.resolve({ ok: true, json: async () => detail })
+      if (url === '/experimental/recipes/7/open') return Promise.reject(new TypeError('Failed to fetch'))
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const nativeSetTimeout = window.setTimeout.bind(window)
+    vi.spyOn(window, 'setTimeout').mockImplementation(((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+      const timer = nativeSetTimeout(handler, delay, ...args)
+      if (delay === 5000 && typeof handler === 'function') queueMicrotask(() => Reflect.apply(handler, window, args))
+      return timer
+    }) as typeof window.setTimeout)
+    render(<App />)
+    openRecipes()
+    expect(await screen.findByText(/โหลดเมนูที่เปิดล่าสุดไม่ได้/)).toBeTruthy()
+    expect(recentSignal?.aborted).toBe(true)
+    fireEvent.click(await screen.findByRole('button', { name: 'เปิดสูตรนี้' }))
+    expect(await screen.findByDisplayValue('สูตรยังเปิดได้')).toBeTruthy()
+  })
+
+  it('pauses later history writes after a timed-out request may still commit', async () => {
+    const detail = (id: number) => ({ id, name: `เมนู ${id}`, favorite: false, ingredients: [{
+      ingredient_version_id: 24, amount: '60', unit: 'g', food_state: 'cooked', ingredient_name: 'ข้าวสมมติ',
+      basis_quantity: '100', basis_unit: 'g', reviewed: true, energy_kcal: null, protein_g: '2', sodium_mg: '1', potassium_mg: null, phosphorus_mg: null,
+    }] })
+    let resolveHangingWrite!: (value: { ok: boolean; json: () => Promise<object> }) => void
+    let markFirstWriteStarted!: () => void
+    const firstWriteStarted = new Promise<void>(resolve => { markFirstWriteStarted = resolve })
+    const hangingWrite = new Promise<{ ok: boolean; json: () => Promise<object> }>(resolve => { resolveHangingWrite = resolve })
+    const timeoutCallbacks: Array<() => void> = []
+    const fetchMock = vi.fn((url: string, options?: RequestInit) => {
+      if (url === '/experimental/recipes') return Promise.resolve({ ok: true, json: async () => ({ items: [{ id: 7, name: 'เมนู 7', favorite: false }, { id: 8, name: 'เมนู 8', favorite: false }] }) })
+      if (url === '/experimental/recipes/recent') return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+      if (url === '/experimental/recipes/7/open') { markFirstWriteStarted(); return hangingWrite }
+      if (url === '/experimental/recipes/8/open') return Promise.resolve({ ok: true, json: async () => ({ recorded: true }) })
+      if (url === '/experimental/recipes/7' || url === '/experimental/recipes/8') return Promise.resolve({ ok: true, json: async () => detail(Number(url.split('/').at(-1))) })
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const nativeSetTimeout = window.setTimeout.bind(window)
+    vi.spyOn(window, 'setTimeout').mockImplementation(((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+      const timer = nativeSetTimeout(handler, delay, ...args)
+      if (delay === 5000 && typeof handler === 'function') timeoutCallbacks.push(() => Reflect.apply(handler, window, args))
+      return timer
+    }) as typeof window.setTimeout)
+    render(<App />)
+    openRecipes()
+    const savedRecipes = screen.getByRole('region', { name: 'สูตรที่บันทึกไว้' })
+    const openButtons = await within(savedRecipes).findAllByRole('button', { name: 'เปิดสูตรนี้' })
+    fireEvent.click(openButtons[0])
+    await firstWriteStarted
+    expect(await screen.findByDisplayValue('เมนู 7')).toBeTruthy()
+    fireEvent.click(within(savedRecipes).getAllByRole('button', { name: 'เปิดสูตรนี้' })[1])
+    expect(await screen.findByDisplayValue('เมนู 8')).toBeTruthy()
+    expect(fetchMock.mock.calls.some(([url, options]) => url === '/experimental/recipes/8/open' && options?.method === 'POST')).toBe(false)
+    expect(timeoutCallbacks.length).toBeGreaterThanOrEqual(2)
+    await act(async () => { timeoutCallbacks.at(-1)!() })
+    expect(await screen.findByText(/ไม่ทราบว่าประวัติการเปิดครั้งล่าสุดบันทึกแล้วหรือไม่/)).toBeTruthy()
+    await act(async () => { resolveHangingWrite({ ok: true, json: async () => ({ recorded: true }) }) })
+    expect(fetchMock.mock.calls.some(([url, options]) => url === '/experimental/recipes/8/open' && options?.method === 'POST')).toBe(false)
+    expect(screen.getByText(/หยุดบันทึกต่อในแท็บนี้เพื่อรักษาลำดับ/)).toBeTruthy()
   })
 
   it('ignores an older recent-list response when a newer open refresh completes first', async () => {
@@ -634,6 +709,42 @@ describe('manual recipe UI', () => {
     await act(async () => { resolveOldList({ ok: true, json: async () => ({ items: [{ recipe_id: 8, name: 'ผลเก่า', favorite: false, opened_at: '2026-11-03T09:00:00Z' }] }) }); await oldList })
     expect(screen.queryByText('ผลเก่า')).toBeNull()
     expect(screen.getByText('รายการล่าสุด')).toBeTruthy()
+  })
+
+  it('does not move focus for a delayed recent-list response after the user moved elsewhere', async () => {
+    const detail = { id: 7, name: 'เมนูปัจจุบัน', favorite: false, ingredients: [{
+      ingredient_version_id: 24, amount: '60', unit: 'g', food_state: 'cooked', ingredient_name: 'ข้าวสมมติ',
+      basis_quantity: '100', basis_unit: 'g', reviewed: true, energy_kcal: null, protein_g: '2', sodium_mg: '1', potassium_mg: null, phosphorus_mg: null,
+    }] }
+    let recentLoads = 0
+    let resolveRefresh!: (value: { ok: boolean; json: () => Promise<{ items: object[] }> }) => void
+    const pendingRefresh = new Promise<{ ok: boolean; json: () => Promise<{ items: object[] }> }>(resolve => { resolveRefresh = resolve })
+    const fetchMock = vi.fn((url: string, options?: RequestInit) => {
+      if (url === '/experimental/recipes') return Promise.resolve({ ok: true, json: async () => ({ items: [{ id: 7, name: 'เมนูปัจจุบัน', favorite: false }] }) })
+      if (url === '/experimental/recipes/recent') {
+        recentLoads++
+        return recentLoads === 1
+          ? Promise.resolve({ ok: true, json: async () => ({ items: [{ recipe_id: 7, name: 'เมนูปัจจุบัน', favorite: false, opened_at: '2026-11-03T10:00:00Z' }] }) })
+          : pendingRefresh
+      }
+      if (url === '/experimental/recipes/7/open') return Promise.resolve({ ok: true, json: async () => ({ recorded: true }) })
+      if (url === '/experimental/recipes/7') return Promise.resolve({ ok: true, json: async () => detail })
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+    openRecipes()
+    const history = screen.getByRole('region', { name: 'เมนูที่เปิดล่าสุด' })
+    const openButton = await within(history).findByRole('button', { name: 'เปิดเมนูนี้' })
+    openButton.focus()
+    fireEvent.click(openButton)
+    expect(await screen.findByDisplayValue('เมนูปัจจุบัน')).toBeTruthy()
+    expect(await screen.findByText('กำลังโหลดเมนูที่เปิดล่าสุด…')).toBeTruthy()
+    const addButton = screen.getByRole('button', { name: /เพิ่มวัตถุดิบ/ })
+    addButton.focus()
+    await act(async () => { resolveRefresh({ ok: true, json: async () => ({ items: [] }) }); await pendingRefresh })
+    expect(await screen.findByText('ยังไม่มีประวัติการเปิดเมนู')).toBeTruthy()
+    expect(document.activeElement).toBe(addButton)
   })
 
   it('refreshes away from a deleted recent recipe and returns focus to history', async () => {
