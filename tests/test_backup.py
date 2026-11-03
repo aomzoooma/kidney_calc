@@ -189,6 +189,14 @@ class EncryptedExportTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "schema is unsupported"):
             create_backup(self.database, self.backup, "passphrase")
 
+    def test_restore_fails_closed_until_schema_and_domain_validation_exist(self):
+        from nutrition.backup import restore_backup
+
+        destination = self.root / "restored.sqlite"
+        with self.assertRaisesRegex(NotImplementedError, "schema lacks full domain validation"):
+            restore_backup(self.backup, destination, "passphrase")
+        self.assertFalse(destination.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

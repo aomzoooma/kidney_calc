@@ -1,8 +1,4 @@
-"""Encrypted logical export for marked synthetic-only SQLite databases.
-
-Restore is intentionally unavailable until private staging and Windows ACL
-behavior can be validated.
-"""
+"""Encrypted logical export for marked synthetic-only SQLite databases."""
 
 from __future__ import annotations
 
@@ -68,6 +64,8 @@ def _key(passphrase: bytes, salt: bytes) -> bytes:
 
 
 def _validate_snapshot(db: sqlite3.Connection) -> None:
+    if db.execute("PRAGMA page_size").fetchone()[0] * db.execute("PRAGMA page_count").fetchone()[0] > _MAX_DB_BYTES:
+        raise ValueError("database exceeds backup size limit")
     if db.execute("PRAGMA integrity_check").fetchone() != ("ok",):
         raise ValueError("database failed integrity check")
     if db.execute("PRAGMA foreign_key_check").fetchone() is not None:
@@ -163,3 +161,8 @@ def create_backup(database: str | Path, backup: str | Path, passphrase: str) -> 
                 os.unlink(temporary_name)
             except FileNotFoundError:
                 pass
+def restore_backup(backup: str | Path, destination: str | Path, passphrase: str) -> None:
+    """Restore remains disabled pending complete schema-object and data validation."""
+    raise NotImplementedError(
+        "restore is blocked: SQLite schema lacks full domain validation and exact object-fidelity checks"
+    )
