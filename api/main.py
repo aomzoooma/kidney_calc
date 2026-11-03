@@ -505,6 +505,12 @@ def get_auth_csrf(request: Request, response: Response, purpose: Literal["login"
     return {"csrf_token": token, "purpose": purpose}
 
 
+@app.get("/auth/status")
+def get_auth_status():
+    """Tell the local UI whether it must authenticate or stays synthetic-only demo."""
+    return {"auth_enabled": _auth_config.enabled, "synthetic_only": True, "clinical_use": False}
+
+
 @app.post("/auth/login")
 def login(payload: LoginInput, request: Request):
     if not _auth_config.enabled:

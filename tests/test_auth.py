@@ -10,7 +10,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import auth_test_config
-from api.auth import AuthCsrfLimiter, AuthLimiter, AuthSessions, load_auth_config
+from api.auth import AuthConfig, AuthCsrfLimiter, AuthLimiter, AuthSessions, load_auth_config
 import api.main as main
 from api.main import app
 
@@ -137,6 +137,15 @@ class AuthApiTest(unittest.TestCase):
         main._auth_csrf_limiter = AuthCsrfLimiter()
         self.client = auth_test_config.AuthTestClient(app, authenticated=False, reset_state=False)
         self.addCleanup(self.client.close)
+
+    def test_auth_status_explicitly_reports_mode_and_synthetic_boundary(self):
+        self.assertEqual(self.client.get("/auth/status").json(), {
+            "auth_enabled": True, "synthetic_only": True, "clinical_use": False,
+        })
+        with patch.object(main, "_auth_config", AuthConfig(False)):
+            self.assertEqual(self.client.get("/auth/status").json(), {
+                "auth_enabled": False, "synthetic_only": True, "clinical_use": False,
+            })
 
     def token(self, client=None, purpose="login"):
         client = client or self.client

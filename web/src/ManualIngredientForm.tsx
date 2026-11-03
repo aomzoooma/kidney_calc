@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react'
+import { apiFetch } from './authClient'
 import { nutrients, type FoodState, type NutrientKey } from './request'
 
 const blankNutrients = () => Object.fromEntries(nutrients.map(([key]) => [key, ''])) as Record<NutrientKey, string>
@@ -24,7 +25,7 @@ export function ManualIngredientForm() {
     event.preventDefault()
     setBusy(true); setError(''); setSavedVersion(null)
     try {
-      const response = await fetch('/experimental/ingredients', {
+      const response = await apiFetch('/experimental/ingredients', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           synthetic_only: true, reviewed: true, name, provider, source_version: sourceVersion,

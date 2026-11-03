@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { apiFetch } from './authClient'
 
 type Profile = {
   id: number
@@ -11,7 +12,7 @@ const emptyGoal = () => ({ nutrient: '', amount: '', unit: '', effective_on: '' 
 const emptyWeight = () => ({ measured_on: '', kilograms: '' })
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, options)
+  const response = await apiFetch(url, options)
   const payload = await response.json()
   if (!response.ok) throw new Error('บันทึกหรือโหลดข้อมูลไม่ได้ ตรวจว่า API ทำงานอยู่แล้วลองอีกครั้ง')
   return payload as T

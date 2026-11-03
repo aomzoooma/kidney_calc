@@ -5,6 +5,8 @@ import { ManualIngredientForm } from './ManualIngredientForm'
 import { RecipeIngredientSnapshotForm } from './RecipeIngredientSnapshotForm'
 import { OcrPreview } from './OcrPreview'
 import { ProfileManager } from './ProfileManager'
+import { AuthGate } from './AuthGate'
+import { apiFetch } from './authClient'
 import './style.css'
 
 type Result = {
@@ -256,7 +258,7 @@ export function App() {
     if (page !== 'recipes') return
     void loadSavedRecipes()
     void loadRecentRecipes()
-    fetch('/experimental/seasonings').then(async response => {
+    apiFetch('/experimental/seasonings').then(async response => {
       const payload = await response.json()
       if (!response.ok) throw new Error('โหลดเครื่องปรุงที่บันทึกไว้ไม่ได้')
       setSavedSeasonings((payload.items as SavedSeasoning[]).filter(item => item.reviewed))
@@ -334,7 +336,7 @@ export function App() {
     const query = savedQuery.trim()
     setSavedSearchBusy(true); setSavedSearchError(''); setSavedIngredients([])
     try {
-      const response = await fetch(`/experimental/ingredients/search?q=${encodeURIComponent(query)}`)
+      const response = await apiFetch(`/experimental/ingredients/search?q=${encodeURIComponent(query)}`)
       const payload = await response.json()
       if (!response.ok) throw new Error('ค้นหารายการที่บันทึกไว้ไม่สำเร็จ')
       if (requestRevision === savedSearchRevision.current && query === savedQuery.trim()) {
@@ -384,7 +386,7 @@ export function App() {
     setTranslatedUSDAFoods({})
     setUsdaBusy(true); setUsdaError(''); setTranslationError(''); setUsdaFoods([])
     try {
-      const response = await fetch(`/experimental/usda/search?q=${encodeURIComponent(query)}`)
+      const response = await apiFetch(`/experimental/usda/search?q=${encodeURIComponent(query)}`)
       const payload = await response.json()
       if (!response.ok) throw new Error(typeof payload.detail === 'string' ? payload.detail : 'ค้นหาฐานข้อมูล USDA ไม่สำเร็จ')
       if (requestRevision === usdaSearchRevision.current) {
@@ -432,7 +434,7 @@ export function App() {
     setTranslationBusyKey(busyKey)
     setTranslationError('')
     try {
-      const response = await fetch('/experimental/local-food-translation', {
+      const response = await apiFetch('/experimental/local-food-translation', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ text, target_language: targetLanguage }),
       })
@@ -514,7 +516,7 @@ export function App() {
     const mutationRevision = savedRecipesMutationRevision.current
     setSavedRecipesBusy(true)
     try {
-      const response = await fetch('/experimental/recipes')
+      const response = await apiFetch('/experimental/recipes')
       const payload = await response.json()
       if (!response.ok || !Array.isArray(payload.items)) throw new Error('Recipe list unavailable')
       if (requestId !== savedRecipesLoadRequest.current || mutationRevision !== savedRecipesMutationRevision.current) return
@@ -591,7 +593,7 @@ export function App() {
     const requestRevision = revision.current
     setRecipeOpenBusyId(recipeId); setRecipeError(''); setRecipeStatus('')
     try {
-      const response = await fetch(`/experimental/recipes/${recipeId}`)
+      const response = await apiFetch(`/experimental/recipes/${recipeId}`)
       const payload = await response.json()
       if (!response.ok || !isSavedRecipeDetail(payload)) {
         if (response.status === 404) {
@@ -640,7 +642,7 @@ export function App() {
     try {
       let id = savedRecipeId
       if (id === null) {
-        const response = await fetch('/experimental/recipes', {
+        const response = await apiFetch('/experimental/recipes', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ synthetic_only: true, name, ingredients: recipeIngredients }),
         })
@@ -654,7 +656,7 @@ export function App() {
         setSavedRecipeId(id)
         ingredientsSaved = true
       } else {
-        const response = await fetch(`/experimental/recipes/${id}/ingredients`, {
+        const response = await apiFetch(`/experimental/recipes/${id}/ingredients`, {
           method: 'PUT', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ synthetic_only: true, ingredients: recipeIngredients }),
         })
@@ -665,7 +667,7 @@ export function App() {
         }
         ingredientsSaved = true
         if (savedRecipeName !== name) {
-          const renamed = await fetch(`/experimental/recipes/${id}`, {
+          const renamed = await apiFetch(`/experimental/recipes/${id}`, {
             method: 'PATCH', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ synthetic_only: true, name }),
           })
@@ -707,7 +709,7 @@ export function App() {
     setRecipeFavoriteBusyId(recipe.id); setRecipeError(''); setRecipeStatus('')
     try {
       const favorite = !recipe.favorite
-      const response = await fetch(`/experimental/recipes/${recipe.id}`, {
+      const response = await apiFetch(`/experimental/recipes/${recipe.id}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ synthetic_only: true, favorite }),
       })
@@ -732,7 +734,7 @@ export function App() {
     const requestId = ++usdaReviewRequest.current
     setUsdaReview({ index, fdcId, data: null, busy: true, saving: false, reviewed: false, error: '' })
     try {
-      const response = await fetch('/experimental/ingredients/usda/preview', {
+      const response = await apiFetch('/experimental/ingredients/usda/preview', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ synthetic_only: true, fdc_id: fdcId }),
       })
@@ -765,7 +767,7 @@ export function App() {
     }
     setUsdaReview(current => current ? { ...current, saving: true, error: '' } : current)
     try {
-      const response = await fetch('/experimental/ingredients/usda', {
+      const response = await apiFetch('/experimental/ingredients/usda', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ synthetic_only: true, reviewed: true, fdc_id: review.fdcId,
           food_state: review.data.food_state, snapshot_digest: review.data.snapshot_digest }),
@@ -804,7 +806,7 @@ export function App() {
     setBusy(true); setError(''); setResult(null)
     const submittedRevision = ++revision.current
     try {
-      const response = await fetch('/experimental/recipes/calculate', {
+      const response = await apiFetch('/experimental/recipes/calculate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(buildCalculationPayload(ingredients, portion)),
       })
@@ -1014,4 +1016,4 @@ export function App() {
 }
 
 const rootElement = document.getElementById('root')
-if (rootElement) createRoot(rootElement).render(<StrictMode><App /></StrictMode>)
+if (rootElement) createRoot(rootElement).render(<StrictMode><AuthGate><App /></AuthGate></StrictMode>)
