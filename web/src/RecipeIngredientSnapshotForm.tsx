@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { nutrients, type Ingredient, type NutrientKey } from './request'
+import { nutrients, type FoodState, type Ingredient, type NutrientKey } from './request'
 
 type Props = {
   ingredient: Ingredient
@@ -9,7 +9,7 @@ type Props = {
   onSaved: (versionId: number) => void
 }
 
-const stateNames: Record<Ingredient['state'], string> = {
+const stateNames: Record<FoodState, string> = {
   raw: 'ดิบ', cooked: 'สุก', as_sold: 'ตามสภาพที่ซื้อ',
 }
 
@@ -24,7 +24,7 @@ export function RecipeIngredientSnapshotForm({ ingredient, disabled, onBusyChang
 
   useEffect(() => { setReviewed(false) }, [ingredient])
 
-  const basisValid = ingredient.name.trim().length > 0
+  const basisValid = ingredient.name.trim().length > 0 && ingredient.unit !== null && ingredient.state !== null
     && Number.isFinite(Number(ingredient.reference)) && Number(ingredient.reference) > 0
   const nutrientsValid = nutrients.every(([key]) => {
     const value = ingredient.values[key as NutrientKey].trim()
@@ -34,7 +34,7 @@ export function RecipeIngredientSnapshotForm({ ingredient, disabled, onBusyChang
   const canSave = basisValid && nutrientsValid && sourceDetailsValid && reviewed && !disabled && !busy
 
   async function save() {
-    if (!canSave) return
+    if (!canSave || ingredient.unit === null || ingredient.state === null) return
     setBusy(true); onErrorChange(''); onBusyChange(true)
     try {
       const response = await fetch('/experimental/ingredients', {
@@ -75,8 +75,8 @@ export function RecipeIngredientSnapshotForm({ ingredient, disabled, onBusyChang
     <p>ตรวจข้อมูลในแถว แล้วระบุแหล่งที่มาของค่าที่กรอกเอง · บันทึกเป็นรุ่นอ้างอิงคงที่ · ช่องสารอาหารที่เว้นว่างยังเป็น “ไม่ทราบ”</p>
     <div className="thai-query-suggestion" role="note">
       <strong>ตรวจข้อมูลที่จะบันทึก</strong>
-      <p>ชื่อ: {ingredient.name || 'ยังไม่ระบุ'} · ปริมาณฐาน {ingredient.reference || 'ยังไม่ระบุ'} {ingredient.unit === 'g' ? 'กรัม' : 'มล.'} · สภาพอาหาร {stateNames[ingredient.state]}</p>
-      <p>ปริมาณในสูตร: {ingredient.amount || 'ยังไม่ระบุ'} {ingredient.unit === 'g' ? 'กรัม' : 'มล.'}</p>
+      <p>ชื่อ: {ingredient.name || 'ยังไม่ระบุ'} · ปริมาณฐาน {ingredient.reference || 'ยังไม่ระบุ'} {ingredient.unit === 'g' ? 'กรัม' : ingredient.unit === 'ml' ? 'มล.' : 'ยังไม่ระบุหน่วย'} · สภาพอาหาร {ingredient.state === null ? 'ยังไม่ระบุสภาพ' : stateNames[ingredient.state]}</p>
+      <p>ปริมาณในสูตร: {ingredient.amount || 'ยังไม่ระบุ'} {ingredient.unit === 'g' ? 'กรัม' : ingredient.unit === 'ml' ? 'มล.' : 'ยังไม่ระบุหน่วย'}</p>
       <ul>{nutrients.map(([key, label, unit]) => {
         const value = ingredient.values[key as NutrientKey].trim()
         return <li key={key}>{label}: {value ? `${value} ${unit}` : 'ไม่ทราบ'}</li>
