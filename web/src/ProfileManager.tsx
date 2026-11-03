@@ -21,7 +21,7 @@ const json = (body: object): RequestInit => ({
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
 })
 
-export function ProfileManager() {
+export function ProfileManager({ onSelectionChange }: { onSelectionChange?: (id: number | null) => void }) {
   const [profiles, setProfiles] = useState<ProfileSummary[]>([])
   const [profile, setProfile] = useState<Profile | null>(null)
   const [name, setName] = useState('')
@@ -45,18 +45,25 @@ export function ProfileManager() {
       selectedProfileId.current = nextId ?? null
       if (nextId) {
         const next = await request<Profile>(`/experimental/profiles/${nextId}`)
-        if (revision === profileRequestRevision.current && selectedProfileId.current === nextId) setProfile(next)
-      } else setProfile(null)
+        if (revision === profileRequestRevision.current && selectedProfileId.current === nextId) {
+          setProfile(next)
+          onSelectionChange?.(nextId)
+        }
+      } else { setProfile(null); onSelectionChange?.(null) }
     } finally { if (revision === profileRequestRevision.current) setLoading(false) }
   }
 
   async function loadProfile(id: number) {
     const revision = ++profileRequestRevision.current
     selectedProfileId.current = id
+    onSelectionChange?.(null)
     setLoading(true)
     try {
       const next = await request<Profile>(`/experimental/profiles/${id}`)
-      if (revision === profileRequestRevision.current && selectedProfileId.current === id) setProfile(next)
+      if (revision === profileRequestRevision.current && selectedProfileId.current === id) {
+        setProfile(next)
+        onSelectionChange?.(id)
+      }
     } catch (cause) {
       if (revision === profileRequestRevision.current && selectedProfileId.current === id) throw cause
     } finally { if (revision === profileRequestRevision.current) setLoading(false) }
@@ -86,6 +93,7 @@ export function ProfileManager() {
         const created = await request<ProfileSummary>('/experimental/profiles', json({ synthetic_only: true, name }))
         profileRequestRevision.current++
         selectedProfileId.current = created.id
+        onSelectionChange?.(created.id)
         setProfiles(current => [created, ...current.filter(item => item.id !== created.id)])
         setProfile({ ...created, dry_weights: [], goals: [] })
         setLoading(false); setName(''); setGoal(emptyGoal()); setWeight(emptyWeight())

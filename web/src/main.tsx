@@ -6,6 +6,7 @@ import { RecipeIngredientSnapshotForm } from './RecipeIngredientSnapshotForm'
 import { OcrPreview } from './OcrPreview'
 import { ProfileManager } from './ProfileManager'
 import { recipeTemplates } from './recipeTemplates'
+import { MealTracking } from './MealTracking'
 import './style.css'
 
 type Result = {
@@ -150,6 +151,9 @@ function isUSDAIngredientPreview(value: unknown, expectedFdcId: number): value i
 
 export function App() {
   const [page, setPage] = useState<PageId>(readPage)
+  const [patientsVisited, setPatientsVisited] = useState(() => readPage() === 'patients')
+  const [mealsVisited, setMealsVisited] = useState(() => readPage() === 'meals')
+  const [selectedProfileId, setSelectedProfileId] = useState<number | null>(null)
   const [ingredientsVisited, setIngredientsVisited] = useState(() => readPage() === 'ingredients')
   const [ingredients, setIngredients] = useState([newIngredient()])
   const [openIngredient, setOpenIngredient] = useState(0)
@@ -250,6 +254,8 @@ export function App() {
       const nextPage = readPage(page)
       setPage(nextPage)
       if (nextPage === 'ingredients') setIngredientsVisited(true)
+      if (nextPage === 'patients') setPatientsVisited(true)
+      if (nextPage === 'meals') setMealsVisited(true)
     }
     window.addEventListener('hashchange', syncPage)
     window.addEventListener('popstate', syncPage)
@@ -282,6 +288,8 @@ export function App() {
     window.history.pushState(null, '', `#${nextPage}`)
     setPage(nextPage)
     if (nextPage === 'ingredients') setIngredientsVisited(true)
+    if (nextPage === 'patients') setPatientsVisited(true)
+    if (nextPage === 'meals') setMealsVisited(true)
   }
 
   function clearUSDAReview() {
@@ -878,9 +886,10 @@ export function App() {
         <a className="home-action" href="#recipes" onClick={event => navigate(event, 'recipes')}>สูตรอาหาร <span>เปิดเครื่องคำนวณทดลอง</span></a>
         <a className="home-action" href="#patients" onClick={event => navigate(event, 'patients')}>โปรไฟล์ข้อมูลสมมติ <span>บันทึกเป้าหมายที่ได้รับและน้ำหนักแห้ง</span></a>
         <h2 className="home-subheading">ส่วนที่กำลังพัฒนา</h2>
-        <p>บันทึกอาหารยังไม่มีระบบบันทึก</p>
+        <a className="home-action" href="#meals" onClick={event => navigate(event, 'meals')}>บันทึกอาหาร <span>บันทึกมื้อที่รับประทานจริงจากสูตรสมมติ</span></a>
       </section>}
-      {page === 'patients' && <ProfileManager />}
+      {patientsVisited && <div hidden={page !== 'patients'}><ProfileManager onSelectionChange={setSelectedProfileId} /></div>}
+      {mealsVisited && <div hidden={page !== 'meals'}><MealTracking profileId={selectedProfileId} active={page === 'meals'} /></div>}
       {ingredientsVisited && <section hidden={page !== 'ingredients'} aria-labelledby="ingredients-title"><div className="page-intro"><h1 id="ingredients-title">วัตถุดิบและเครื่องปรุง</h1><p>การอ่านภาพและบันทึกยังเป็นการทดลอง ใช้ภาพทดสอบเท่านั้น</p></div><OcrPreview /><ManualIngredientForm /></section>}
       {page === 'recipes' && <section aria-labelledby="recipe-title">
         <div className="page-intro"><h1 id="recipe-title">สูตรอาหาร</h1><p>เปิดสูตรที่บันทึกไว้ หรือเพิ่มวัตถุดิบทีละรายการเพื่อเริ่มสูตรใหม่</p></div>
@@ -1066,7 +1075,6 @@ export function App() {
           <p className="footnote">ค่าที่ทราบรวมตามสูตรและสัดส่วนเสิร์ฟ ค่าที่เว้นว่างยังคงเป็น “ไม่ทราบ” ไม่ได้ถือเป็นศูนย์</p>
         </section>}
       </section>}
-      {page === 'meals' && <section className="placeholder-page" aria-labelledby="meals-title"><h1 id="meals-title">บันทึกอาหาร</h1><p className="status-line">กำลังพัฒนา</p><p>ยังไม่มีระบบบันทึกมื้ออาหารหรือประวัติการรับประทาน ส่วนนี้ยังไม่เก็บข้อมูล</p></section>}
     </main>
     <footer><p>ข้อมูลทดสอบเท่านั้น · ยังไม่มีการตรวจสอบทางคลินิก · ห้ามใช้ตัดสินใจด้านการรักษา</p></footer>
   </div>

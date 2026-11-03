@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { App } from '../src/main'
 
@@ -37,7 +37,8 @@ it('shows clear navigation for every app area and keeps usable flows reachable',
 
   fireEvent.click(screen.getByRole('link', { name: 'บันทึกอาหาร' }))
   expect(screen.getByRole('heading', { name: 'บันทึกอาหาร' })).toBeTruthy()
-  expect(screen.getByText(/ยังไม่มีระบบบันทึกมื้ออาหาร/)).toBeTruthy()
+  expect(screen.getByText(/เลือกโปรไฟล์สมมติในหน้า/)).toBeTruthy()
+  expect(screen.getByRole('link', { name: 'ไปเลือกโปรไฟล์' })).toBeTruthy()
 })
 
 it('lets the home action open the principal seasoning flow', () => {
@@ -46,6 +47,27 @@ it('lets the home action open the principal seasoning flow', () => {
   fireEvent.click(screen.getByRole('link', { name: /วัตถุดิบและเครื่องปรุง.*เพิ่มจากภาพทดสอบ/ }))
   expect(screen.getByRole('heading', { name: 'วัตถุดิบและเครื่องปรุง' })).toBeTruthy()
   expect(window.location.hash).toBe('#ingredients')
+})
+
+it('keeps the selected synthetic profile when moving from profiles to meal tracking', async () => {
+  const totals = Object.fromEntries(['energy_kcal', 'protein_g', 'sodium_mg', 'potassium_mg', 'phosphorus_mg']
+    .map(key => [key, { value: null, complete: false }]))
+  const fetchMock = vi.fn(async (url: string) => {
+    if (url === '/experimental/profiles') return { ok: true, json: async () => ({ items: [{ id: 4, name: 'ตัวอย่าง' }] }) }
+    if (url === '/experimental/profiles/4') return { ok: true, json: async () => ({ id: 4, name: 'ตัวอย่าง', dry_weights: [], goals: [] }) }
+    if (url === '/experimental/recipes') return { ok: true, json: async () => ({ items: [] }) }
+    if (url.startsWith('/experimental/profiles/4/meals?day=')) return { ok: true, json: async () => ({ items: [], profile_id: 4, day: new URL(`http://local${url}`).searchParams.get('day'), synthetic_only: true, clinical_use: false }) }
+    if (url.includes('/meals/daily?') || url.includes('/meals/weekly?')) return { ok: true, json: async () => ({ profile_id: 4, start_date: '2026-11-03', end_date: '2026-11-03', entry_count: 0, totals, synthetic_only: true, clinical_use: false }) }
+    throw new Error(`Unexpected request ${url}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  render(<App />)
+  fireEvent.click(screen.getByRole('link', { name: 'ผู้ป่วย' }))
+  expect(await screen.findByRole('option', { name: 'ตัวอย่าง' })).toBeTruthy()
+  await waitFor(() => expect(screen.getByLabelText('เลือกโปรไฟล์')).toHaveProperty('value', '4'))
+  fireEvent.click(screen.getByRole('link', { name: 'บันทึกอาหาร' }))
+  expect(await screen.findByRole('heading', { name: 'ประวัติวันที่เลือก' })).toBeTruthy()
+  expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/experimental/profiles/4/meals?day='))).toBe(true)
 })
 
 it('preserves a draft when navigating and using the skip link', () => {

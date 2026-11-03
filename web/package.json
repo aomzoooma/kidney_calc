@@ -9,6 +9,7 @@
     "test": "node --test tests/request.test.mjs && vitest run --environment jsdom tests/*.test.tsx"
   },
   "dependencies": {
+    "@js-temporal/polyfill": "^0.5.1",
     "react": "19.2.0",
     "react-dom": "19.2.0"
   },
