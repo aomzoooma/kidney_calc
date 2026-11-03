@@ -16,6 +16,7 @@ type Result = {
 type USDAFood = { fdc_id: number; description: string; source_type: string; source_version: string | null; food_state: FoodState | null }
 type FoodTextTranslation = { sourceText: string; translation: string; targetLanguage: 'en' | 'th' }
 type SavedRecipeSummary = { id: number; name: string; favorite: boolean }
+type RecentRecipe = { recipe_id: number; name: string; favorite: boolean; opened_at: string }
 type SavedRecipeIngredient = {
   ingredient_version_id: number; seasoning_version_id: number | null; amount: string; unit: Ingredient['unit']; food_state: FoodState;
   ingredient_name: string; brand?: string | null; basis_quantity: string; basis_unit: Ingredient['unit']; reviewed: true;
@@ -74,6 +75,18 @@ function isSavedRecipeSummary(value: unknown): value is SavedRecipeSummary {
   return Number.isInteger(item.id) && Number(item.id) > 0 && typeof item.name === 'string' && typeof item.favorite === 'boolean'
 }
 
+function isRecentRecipe(value: unknown): value is RecentRecipe {
+  if (!value || typeof value !== 'object') return false
+  const item = value as Record<string, unknown>
+  return Number.isInteger(item.recipe_id) && Number(item.recipe_id) > 0
+    && typeof item.name === 'string' && typeof item.favorite === 'boolean'
+    && typeof item.opened_at === 'string' && Number.isFinite(Date.parse(item.opened_at))
+}
+
+function formatRecentOpenedAt(value: string): string {
+  return new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Bangkok' }).format(new Date(value))
+}
+
 function isSavedRecipeDetail(value: unknown): value is SavedRecipeDetail {
   if (!isSavedRecipeSummary(value) || !Array.isArray((value as SavedRecipeDetail).ingredients)) return false
   const ingredients = (value as SavedRecipeDetail).ingredients as unknown[]
@@ -122,11 +135,15 @@ export function App() {
   const [savedSearchBusy, setSavedSearchBusy] = useState(false)
   const [savedSearchError, setSavedSearchError] = useState('')
   const [savedRecipes, setSavedRecipes] = useState<SavedRecipeSummary[]>([])
+  const [recentRecipes, setRecentRecipes] = useState<RecentRecipe[]>([])
+  const [recentRecipesBusy, setRecentRecipesBusy] = useState(false)
+  const [recentRecipesError, setRecentRecipesError] = useState('')
   const [showFavoriteRecipes, setShowFavoriteRecipes] = useState(false)
   const favoriteFilterRef = useRef<HTMLButtonElement>(null)
   const restoreFavoriteFilterFocus = useRef(false)
   const savedIngredientSearchRef = useRef<HTMLDetailsElement>(null)
   const usdaFoodSearchRef = useRef<HTMLDetailsElement>(null)
+  const recentRecipesHeadingRef = useRef<HTMLHeadingElement>(null)
   const pendingIngredientFocus = useRef<number | null>(null)
   const [savedRecipesBusy, setSavedRecipesBusy] = useState(false)
   const [savedRecipesError, setSavedRecipesError] = useState('')
@@ -165,6 +182,9 @@ export function App() {
   const usdaReviewRequest = useRef(0)
   const savedRecipesLoadRequest = useRef(0)
   const savedRecipesMutationRevision = useRef(0)
+  const recentRecipesLoadRequest = useRef(0)
+  const recentOpenSequence = useRef(0)
+  const recentOpenQueue = useRef<Promise<void>>(Promise.resolve())
   const savedSearchRevision = useRef(0)
   const usdaSearchRevision = useRef(0)
   const queryTranslationRevision = useRef(0)
@@ -211,6 +231,7 @@ export function App() {
   useEffect(() => {
     if (page !== 'recipes') return
     void loadSavedRecipes()
+    void loadRecentRecipes()
     fetch('/experimental/seasonings').then(async response => {
       const payload = await response.json()
       if (!response.ok) throw new Error('โหลดเครื่องปรุงที่บันทึกไว้ไม่ได้')
@@ -484,6 +505,50 @@ export function App() {
     }
   }
 
+  async function loadRecentRecipes(openSequence?: number) {
+    const requestId = ++recentRecipesLoadRequest.current
+    const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const focusedRecipeId = focused?.closest<HTMLElement>('[data-recent-recipe-id]')?.dataset.recentRecipeId
+    setRecentRecipesBusy(true)
+    try {
+      const response = await fetch('/experimental/recipes/recent')
+      const payload = await response.json()
+      if (!response.ok || !Array.isArray(payload.items)) throw new Error('Recent recipes unavailable')
+      if (requestId !== recentRecipesLoadRequest.current || (openSequence !== undefined && openSequence !== recentOpenSequence.current)) return
+      const items = (payload.items as unknown[]).filter(isRecentRecipe).slice(0, 10)
+      setRecentRecipes(items)
+      setRecentRecipesError('')
+      if (focusedRecipeId && !items.some(item => String(item.recipe_id) === focusedRecipeId)) {
+        requestAnimationFrame(() => recentRecipesHeadingRef.current?.focus())
+      }
+    } catch {
+      if (requestId === recentRecipesLoadRequest.current && (openSequence === undefined || openSequence === recentOpenSequence.current)) {
+        setRecentRecipesError('โหลดเมนูที่เปิดล่าสุดไม่ได้ · ลองโหลดรายการอีกครั้ง')
+      }
+    } finally {
+      if (requestId === recentRecipesLoadRequest.current) setRecentRecipesBusy(false)
+    }
+  }
+
+  function recordRecentRecipeOpen(recipeId: number) {
+    const sequence = ++recentOpenSequence.current
+    setRecentRecipesError('')
+    recentOpenQueue.current = recentOpenQueue.current.catch(() => undefined).then(async () => {
+      try {
+        const response = await fetch(`/experimental/recipes/${recipeId}/open`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ synthetic_only: true }),
+        })
+        if (!response.ok) throw new Error('Recent recipe open unavailable')
+        if (sequence === recentOpenSequence.current) await loadRecentRecipes(sequence)
+      } catch {
+        if (sequence === recentOpenSequence.current) {
+          setRecentRecipesError('บันทึกประวัติการเปิดเมนูไม่สำเร็จ · สูตรยังเปิดและแก้ไขได้ตามปกติ')
+        }
+      }
+    })
+  }
+
   async function openSavedRecipe(recipeId: number) {
     if (recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving) return
     if (recipeDraftChanged && !window.confirm('เปิดสูตรนี้จะแทนที่รายการและสัดส่วนที่กำลังกรอก หากยังไม่บันทึกให้กดยกเลิกก่อน')) return
@@ -492,7 +557,13 @@ export function App() {
     try {
       const response = await fetch(`/experimental/recipes/${recipeId}`)
       const payload = await response.json()
-      if (!response.ok || !isSavedRecipeDetail(payload)) throw new Error('Recipe detail unavailable')
+      if (!response.ok || !isSavedRecipeDetail(payload)) {
+        if (response.status === 404) {
+          void loadSavedRecipes()
+          void loadRecentRecipes()
+        }
+        throw new Error('Recipe detail unavailable')
+      }
       if (requestRevision !== revision.current) {
         setRecipeStatus('ยังไม่ได้เปิดสูตร เพราะแบบร่างมีการเปลี่ยนแปลงระหว่างโหลด · ลองเปิดอีกครั้ง')
         return
@@ -510,6 +581,7 @@ export function App() {
       setPortion('1'); setOpenIngredient(0); setResult(null); setError('')
       setRecipeDraftChanged(false); clearUSDAReview()
       setRecipeStatus(`เปิดสูตร “${payload.name}” แล้ว · เปลี่ยนส่วนผสมได้ และกดบันทึกการเปลี่ยนแปลงเมื่อพร้อม`)
+      recordRecentRecipeOpen(recipeId)
     } catch {
       setRecipeError('เปิดสูตรนี้ไม่ได้ · โหลดรายการสูตรใหม่แล้วลองอีกครั้ง')
     } finally {
@@ -738,6 +810,18 @@ export function App() {
       {page === 'recipes' && <section aria-labelledby="recipe-title">
         <div className="page-intro"><h1 id="recipe-title">สูตรอาหาร</h1><p>เปิดสูตรที่บันทึกไว้ หรือเพิ่มวัตถุดิบทีละรายการเพื่อเริ่มสูตรใหม่</p></div>
         <aside className="notice" role="note"><span className="notice-mark" aria-hidden="true">!</span><div><h2>ใช้ตัวเลขสมมติเท่านั้น</h2><p>ห้ามใช้ค่าจากฉลากอาหารจริงหรือข้อมูลผู้ป่วย ผลนี้ใช้ตัดสินใจด้านอาหารหรือการรักษาไม่ได้</p><p>ห้ามใส่ข้อมูลผู้ป่วยในคำค้น USDA · คำค้นถูกส่งออกจากเครื่อง</p></div></aside>
+        <section className="usda-search recent-menu-history" aria-labelledby="recent-menu-title">
+          <h2 id="recent-menu-title" ref={recentRecipesHeadingRef} tabIndex={-1}>เมนูที่เปิดล่าสุด</h2>
+          <p>ประวัติการเปิดสูตรที่บันทึกไว้ · ไม่ใช่บันทึกการปรุงหรือการรับประทาน</p>
+          {recentRecipesBusy && <p role="status" aria-live="polite">กำลังโหลดเมนูที่เปิดล่าสุด…</p>}
+          {recentRecipesError && <p className="error" role="status">{recentRecipesError} <button type="button" className="thai-query-choice" onClick={() => void loadRecentRecipes()}>โหลดอีกครั้ง</button></p>}
+          {!recentRecipesBusy && !recentRecipesError && recentRecipes.length === 0 && <p>ยังไม่มีประวัติการเปิดเมนู</p>}
+          <ul className="usda-results">{recentRecipes.map(recipe => <li key={recipe.recipe_id} data-recent-recipe-id={recipe.recipe_id}>
+            <strong>{recipe.name}</strong>
+            <small>เปิดล่าสุด {formatRecentOpenedAt(recipe.opened_at)}{recipe.favorite ? ' · เมนูโปรด' : ''}</small>
+            <button type="button" className="add-button" disabled={recipeOpenBusyId !== null || recipeSaveBusy || manualSnapshotBusyIndex !== null || usdaReview?.saving === true} onClick={() => void openSavedRecipe(recipe.recipe_id)}>เปิดเมนูนี้</button>
+          </li>)}</ul>
+        </section>
         <section className="usda-search" aria-labelledby="saved-recipes-title">
           <h2 id="saved-recipes-title">สูตรที่บันทึกไว้</h2>
           <p>เปิดสูตรเพื่อแก้ส่วนผสม คำนวณใหม่ หรือทำเครื่องหมายรายการโปรด · บันทึกได้เมื่อทุกส่วนผสมใช้วัตถุดิบที่บันทึกและตรวจแล้วในเครื่อง</p>
