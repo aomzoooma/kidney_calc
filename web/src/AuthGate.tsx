@@ -38,7 +38,7 @@ async function checkSession(): Promise<'demo' | 'login' | 'authenticated' | 'err
   }
 }
 
-function csrfFailure(status: number, purpose: 'login' | 'write'): string {
+function csrfFailure(status: number, purpose: 'login' | 'write' | 'logout'): string {
   if (status === 429) {
     return purpose === 'login'
       ? 'ระบบจำกัดการเริ่มเข้าสู่ระบบชั่วคราว · รอสักครู่แล้วลองใหม่ หากเพิ่งยืนยันแล้วหน้าเว็บขาดการตอบรับ ให้รีสตาร์ต backend ก่อนลองอีกครั้ง'
@@ -190,11 +190,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
     setBusy(true)
     setError('')
     try {
-      const csrfResponse = await fetch('/auth/csrf?purpose=write', {
+      const csrfResponse = await fetch('/auth/csrf?purpose=logout', {
         credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' },
       })
       if (!csrfResponse.ok) {
-        setError(csrfFailure(csrfResponse.status, 'write'))
+        setError(csrfFailure(csrfResponse.status, 'logout'))
         return
       }
       const csrf = await readJson(csrfResponse)

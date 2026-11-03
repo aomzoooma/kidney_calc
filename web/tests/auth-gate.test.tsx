@@ -83,7 +83,7 @@ it('explains restart recovery if confirm response is lost', async () => {
   expect(screen.queryByText('หน้าวางแผน')).toBeNull()
 })
 
-it('logs out with one-time write token and returns to login', async () => {
+it('logs out with one-time logout token and returns to login', async () => {
   const calls: Array<[string, RequestInit | undefined]> = []
   const fetchMock = vi.fn(async (path: string, options?: RequestInit) => {
     calls.push([path, options])
@@ -92,7 +92,7 @@ it('logs out with one-time write token and returns to login', async () => {
     })
     if (path === '/auth/me') return reply(calls.filter(([p]) => p === '/auth/me').length === 1 ? 200 : 401,
       { authenticated: true, username: 'admin' })
-    if (path === '/auth/csrf?purpose=write') return reply(200, { csrf_token: 'write-token' })
+    if (path === '/auth/csrf?purpose=logout') return reply(200, { csrf_token: 'logout-token' })
     if (path === '/auth/logout') return reply(204)
     throw new Error(`Unexpected request: ${path}`)
   })
@@ -102,10 +102,10 @@ it('logs out with one-time write token and returns to login', async () => {
   fireEvent.click(await screen.findByRole('button', { name: 'ออกจากระบบ' }))
   expect(await screen.findByRole('heading', { name: 'เข้าสู่ระบบ' })).toBeTruthy()
   expect(calls.map(([path]) => path)).toEqual([
-    '/auth/status', '/auth/me', '/auth/csrf?purpose=write', '/auth/logout',
+    '/auth/status', '/auth/me', '/auth/csrf?purpose=logout', '/auth/logout',
   ])
   expect(calls[3][1]?.credentials).toBe('same-origin')
-  expect(calls[3][1]?.headers).toEqual(expect.objectContaining({ 'X-CSRF-Token': 'write-token' }))
+  expect(calls[3][1]?.headers).toEqual(expect.objectContaining({ 'X-CSRF-Token': 'logout-token' }))
 })
 
 it('does not expose planner when auth status cannot be checked', async () => {

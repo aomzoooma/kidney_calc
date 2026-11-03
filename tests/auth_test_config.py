@@ -28,6 +28,7 @@ class AuthTestClient(TestClient):
             main._auth_sessions = AuthSessions()
             main._auth_limiter = AuthLimiter()
             main._auth_csrf_limiter = AuthCsrfLimiter()
+            main._auth_logout_csrf_limiter = AuthCsrfLimiter(max_requests=8)
         if authenticated:
             self.login()
 
@@ -54,6 +55,7 @@ class AuthTestClient(TestClient):
         guarded = path.startswith("/experimental/") or path == "/auth/logout"
         headers = dict(kwargs.pop("headers", {}) or {})
         if self._authenticated and self.auto_csrf and unsafe and guarded:
-            headers.setdefault("x-csrf-token", self.get("/auth/csrf", params={"purpose": "write"}).json()["csrf_token"])
+            purpose = "logout" if path == "/auth/logout" else "write"
+            headers.setdefault("x-csrf-token", self.get("/auth/csrf", params={"purpose": purpose}).json()["csrf_token"])
         kwargs["headers"] = headers
         return super().request(method, url, **kwargs)

@@ -337,6 +337,7 @@ if (_auth_config.enabled and not _auth_password.current_hasher.identify(
 _auth_limiter = AuthLimiter()
 _auth_sessions = AuthSessions()
 _auth_csrf_limiter = AuthCsrfLimiter()
+_auth_logout_csrf_limiter = AuthCsrfLimiter(max_requests=8)
 _SESSION_TTL_SECONDS = 8 * 60 * 60
 _demo_store_lock = threading.Lock()
 # Experimental single-process cache: inode identity catches atomic replacements,
@@ -489,15 +490,22 @@ async def localhost_only(request: Request, call_next):
 
 
 @app.get("/auth/csrf")
-def get_auth_csrf(request: Request, response: Response, purpose: Literal["login", "write"] = "login"):
+def get_auth_csrf(request: Request, response: Response,
+                  purpose: Literal["login", "write", "logout"] = "login"):
     if not _auth_config.enabled:
         raise HTTPException(status_code=404, detail="Not found")
     if not csrf_bootstrap_valid(request, _auth_config.auth_origin):
         raise HTTPException(status_code=403, detail="Invalid request")
     client_key = request.client.host if request.client is not None else ""
-    if not _auth_csrf_limiter.allow(client_key):
-        raise HTTPException(status_code=429, detail="Too many authentication requests")
     session_id = _current_session_id(request)
+    if purpose == "logout":
+        if session_id is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        allowed = _auth_logout_csrf_limiter.allow(f"{session_id}:{client_key}")
+    else:
+        allowed = _auth_csrf_limiter.allow(client_key)
+    if not allowed:
+        raise HTTPException(status_code=429, detail="Too many authentication requests")
     token = _auth_sessions.issue_csrf(session_id, purpose, client_key)
     if token is None:
         raise HTTPException(status_code=429, detail="Authentication transition is unavailable")
@@ -607,7 +615,7 @@ def logout(request: Request):
         raise HTTPException(status_code=401, detail="Authentication required")
     token = csrf_token(request)
     if (not csrf_origin_valid(request, _auth_config.auth_origin)
-            or not _auth_sessions.consume_write_nonce(token, request.session["sid"])):
+            or not _auth_sessions.consume_logout_nonce(token, request.session["sid"])):
         raise HTTPException(status_code=403, detail="Invalid request")
     if not _auth_sessions.revoke(request.session["sid"]):
         raise HTTPException(status_code=401, detail="Authentication required")

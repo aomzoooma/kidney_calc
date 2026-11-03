@@ -3,6 +3,8 @@
 import os
 from concurrent.futures import ThreadPoolExecutor
 from http.cookies import SimpleCookie
+from pathlib import Path
+import tempfile
 import threading
 import unittest
 from unittest.mock import patch
@@ -135,6 +137,7 @@ class AuthApiTest(unittest.TestCase):
         main._auth_sessions = AuthSessions()
         main._auth_limiter = AuthLimiter()
         main._auth_csrf_limiter = AuthCsrfLimiter()
+        main._auth_logout_csrf_limiter = AuthCsrfLimiter(max_requests=8)
         self.client = auth_test_config.AuthTestClient(app, authenticated=False, reset_state=False)
         self.addCleanup(self.client.close)
 
@@ -190,6 +193,75 @@ class AuthApiTest(unittest.TestCase):
         self.assertEqual(self.client.get("/auth/csrf").status_code, 200)
         self.assertEqual(self.client.get("/auth/csrf").status_code, 429)
 
+    def test_logout_nonce_survives_write_bootstrap_burst(self):
+        self.client.login()
+        for _ in range(29):
+            self.assertEqual(self.client.post("/experimental/profiles", json={}).status_code, 422)
+        logout_token = self.token(purpose="logout")
+        self.assertEqual(self.client.post("/auth/logout", headers={
+            "x-csrf-token": logout_token,
+        }).status_code, 204)
+
+    def test_unauthenticated_logout_nonce_request_does_not_spend_logout_quota(self):
+        main._auth_logout_csrf_limiter = AuthCsrfLimiter(max_requests=1)
+        self.assertEqual(self.client.get("/auth/csrf", params={"purpose": "logout"}).status_code, 401)
+        self.client.login()
+        self.assertEqual(self.client.get("/auth/csrf", params={"purpose": "logout"}).status_code, 200)
+
+    def test_logout_nonce_has_separate_outstanding_scope_from_write_tokens(self):
+        self.client.login()
+        for _ in range(8):
+            self.token(purpose="write")
+        logout_token = self.token(purpose="logout")
+        self.assertEqual(self.client.post("/auth/logout", headers={
+            "x-csrf-token": logout_token,
+        }).status_code, 204)
+
+    def test_logout_nonce_rejects_cross_origin_and_replay(self):
+        self.client.login()
+        logout_token = self.token(purpose="logout")
+        self.assertEqual(self.client.post("/auth/logout", headers={
+            "x-csrf-token": logout_token, "origin": "http://attacker.example",
+        }).status_code, 403)
+        headers = {"x-csrf-token": logout_token}
+        self.assertEqual(self.client.post("/auth/logout", headers=headers).status_code, 204)
+        self.client.auto_csrf = False
+        self.assertEqual(self.client.post("/auth/logout", headers=headers).status_code, 401)
+
+    def test_concurrent_logout_nonces_revoke_session_once(self):
+        self.client.login()
+        tokens = [self.token(purpose="logout") for _ in range(2)]
+        other = auth_test_config.AuthTestClient(app, authenticated=False, reset_state=False)
+        self.addCleanup(other.close)
+        other.cookies.set("kidney_calc_session", self.client.cookies.get("kidney_calc_session"),
+                         domain="127.0.0.1", path="/")
+        self.client.auto_csrf = other.auto_csrf = False
+
+        def logout(client, token):
+            return client.post("/auth/logout", headers={"x-csrf-token": token})
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(pool.map(logout, (self.client, other), tokens))
+        statuses = [response.status_code for response in responses]
+        self.assertEqual(statuses.count(204), 1)
+        self.assertIn(next(status for status in statuses if status != 204), {401, 403})
+
+    def test_login_write_and_logout_workflow(self):
+        self.client.login()
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
+            "KIDNEY_EXPERIMENTAL_DB": str(Path(directory) / "synthetic.db"),
+        }):
+            created = self.client.post("/experimental/profiles", json={
+                "synthetic_only": True, "name": "Test profile",
+            })
+            self.assertEqual(created.status_code, 200)
+            logout_token = self.token(purpose="logout")
+            logged_out = self.client.post("/auth/logout", headers={
+                "x-csrf-token": logout_token,
+            })
+            self.assertEqual(logged_out.status_code, 204)
+            self.assertEqual(self.client.get("/auth/me").status_code, 401)
+
     def test_login_confirm_ack_rotation_logout_replay_and_cookie_flags(self):
         nonce = self.token()
         headers = {"x-csrf-token": nonce}
@@ -236,8 +308,8 @@ class AuthApiTest(unittest.TestCase):
             "x-csrf-token": replacement.json()["csrf_token"],
         }).status_code, 204)
 
-        write_token = self.token(purpose="write")
-        logged_out = self.client.post("/auth/logout", headers={"x-csrf-token": write_token})
+        logout_token = self.token(purpose="logout")
+        logged_out = self.client.post("/auth/logout", headers={"x-csrf-token": logout_token})
         self.assertEqual(logged_out.status_code, 204)
         self.assertNotIn("set-cookie", logged_out.headers)
         replay.cookies.set("kidney_calc_session", new_cookie, domain="127.0.0.1", path="/")
@@ -279,13 +351,13 @@ class AuthApiTest(unittest.TestCase):
 
     def test_logout_cancels_pending_relogin_before_cookie_confirmation(self):
         self.client.login()
-        write_token = self.token(purpose="write")
+        logout_token = self.token(purpose="logout")
         nonce = self.token(purpose="login")
         login = self.client.post("/auth/login", json={
             "username": "test-admin", "password": auth_test_config.TEST_PASSWORD,
         }, headers={"x-csrf-token": nonce})
         self.assertEqual(login.status_code, 200)
-        logout = self.client.post("/auth/logout", headers={"x-csrf-token": write_token})
+        logout = self.client.post("/auth/logout", headers={"x-csrf-token": logout_token})
         self.assertEqual(logout.status_code, 204)
         confirm = self.client.post("/auth/confirm", json={"login_ticket": login.json()["login_ticket"]},
                                    headers={"x-csrf-token": nonce})

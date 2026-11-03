@@ -17,7 +17,7 @@ export AUTH_ORIGIN=http://127.0.0.1:8000
 export AUTH_COOKIE_SECURE=false
 ```
 
-The first-run client flow is `GET /auth/csrf?purpose=login` → `POST /auth/login` → `POST /auth/confirm` → `POST /auth/ack`. The confirm response sets the signed `HttpOnly`, `SameSite=Strict` session cookie; the client acknowledges receipt before accessing data or starting another session transition. Authenticated unsafe requests and logout require a one-time token from `GET /auth/csrf?purpose=write` in `X-CSRF-Token`, plus exact configured `Origin` and `Host`. The paired web flow is local-development only and remains unverified in a real browser.
+The first-run client flow is `GET /auth/csrf?purpose=login` → `POST /auth/login` → `POST /auth/confirm` → `POST /auth/ack`. The confirm response sets the signed `HttpOnly`, `SameSite=Strict` session cookie; the client acknowledges receipt before accessing data or starting another session transition. Authenticated unsafe requests require a one-time token from `GET /auth/csrf?purpose=write`; logout uses its own one-time token from `GET /auth/csrf?purpose=logout`. Both require exact configured `Origin` and `Host`. The paired web flow is local-development only and remains unverified in a real browser.
 
 PowerShell first-run setup and recovery steps are in [docs/ADMIN_AUTH.md](docs/ADMIN_AUTH.md). The web UI now detects auth mode and performs the login, cookie acknowledgment, and logout flow; browser, phone, Windows-service, and HTTPS deployment checks remain incomplete.
 

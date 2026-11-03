@@ -225,11 +225,13 @@ class AuthSessions:
                             and self._current.session_id != session_id)):
                     return None
                 kind = "login"
-            else:
+            elif purpose in {"write", "logout"}:
                 if (self._current is None or not self._current.acknowledged
                         or self._current.session_id != session_id):
                     return None
-                kind = "write"
+                kind = purpose
+            else:
+                return None
             token = secrets.token_urlsafe(32)
             self._csrf[self._digest(token)] = (session_id, now + self._CSRF_TTL, kind, client_key)
             return token
@@ -241,10 +243,16 @@ class AuthSessions:
             return entry is not None and entry[0] == client_session_id and entry[2] == "login"
 
     def consume_write_nonce(self, token: str, session_id: str) -> bool:
+        return self._consume_csrf_nonce(token, session_id, "write")
+
+    def consume_logout_nonce(self, token: str, session_id: str) -> bool:
+        return self._consume_csrf_nonce(token, session_id, "logout")
+
+    def _consume_csrf_nonce(self, token: str, session_id: str, purpose: str) -> bool:
         with self._lock:
             self._prune(int(self._clock()))
             entry = self._csrf.get(self._digest(token))
-            if (entry is None or entry[0] != session_id or entry[2] != "write"
+            if (entry is None or entry[0] != session_id or entry[2] != purpose
                     or self._current is None or not self._current.acknowledged
                     or self._current.session_id != session_id):
                 return False
