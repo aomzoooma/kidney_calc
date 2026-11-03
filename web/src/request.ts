@@ -9,7 +9,7 @@ export type NutrientKey = typeof nutrients[number][0]
 export type FoodState = 'raw' | 'cooked' | 'as_sold'
 export type IngredientSource = 'manual' | 'usda' | 'seasoning' | 'saved'
 export type Ingredient = {
-  rowId: string; name: string; amount: string; unit: 'g' | 'ml'; state: FoodState; reference: string;
+  rowId: string; name: string; amount: string; unit: 'g' | 'ml' | null; state: FoodState | null; reference: string;
   values: Record<NutrientKey, string>; source: IngredientSource; seasoningVersionId: number | null;
   ingredientVersionId: number | null; fdcId: number | null; fdcState: FoodState | null
 }
