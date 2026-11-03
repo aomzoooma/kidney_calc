@@ -96,7 +96,7 @@ async function fetchRecentHistory(url: string, init: RequestInit = {}): Promise<
   try {
     return await Promise.race([
       (async () => {
-        const response = await fetch(url, { ...init, signal: controller.signal })
+        const response = await apiFetch(url, { ...init, signal: controller.signal })
         const payload = await response.json()
         return { ok: response.ok, status: response.status, payload: payload as unknown }
       })(),
