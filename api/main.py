@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictBool, StrictInt, ValidationError, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictBool, StrictInt, ValidationError, field_validator, model_validator
 
 from nutrition.calculator import NUTRIENTS, Measure, NutrientSource, calculate
 from nutrition.label_parser import parse_nutrition_label
@@ -224,15 +224,22 @@ class SyntheticWeightInput(BaseModel):
 class SyntheticMealInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     synthetic_only: Literal[True]
-    recipe_id: Annotated[StrictInt, Field(gt=0)]
+    recipe_id: Annotated[StrictInt, Field(gt=0, le=2**63 - 1)]
     consumed_at: datetime
     portion: Portion
 
-    @model_validator(mode="after")
-    def require_timezone(self):
-        if self.consumed_at.tzinfo is None or self.consumed_at.utcoffset() is None:
+    @field_validator("consumed_at", mode="before")
+    @classmethod
+    def require_iso_timezone_text(cls, value):
+        if not isinstance(value, str):
+            raise ValueError("consumed_at must be an ISO datetime string with a timezone")
+        try:
+            parsed = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("consumed_at must be an ISO datetime string with a timezone") from exc
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
             raise ValueError("consumed_at must include a timezone")
-        return self
+        return value
 
 
 def _demo_store():
@@ -280,6 +287,8 @@ def _recipe_store():
 
 
 def _meal_store():
+    _profile_store()
+    _recipe_store()
     return MealTrackingStore(_demo_store().ingredients.database)
 
 
@@ -433,14 +442,12 @@ def add_profile_weight(profile_id: Annotated[int, Field(gt=0)], payload: Synthet
 
 
 @app.post('/experimental/profiles/{profile_id}/meals')
-def record_profile_meal(profile_id: Annotated[int, Field(gt=0)], payload: SyntheticMealInput):
+def record_profile_meal(profile_id: Annotated[int, Field(gt=0, le=2**63 - 1)], payload: SyntheticMealInput):
     try:
         entry_id = _meal_store().record_consumption(profile_id, payload.recipe_id,
                                                     payload.consumed_at, payload.portion)
-        entry = _meal_store().get_entry(entry_id)
-        if entry is None:
-            raise HTTPException(status_code=503, detail='Meal was saved but could not be read back')
-        return _meal_entry_response(entry)
+        return {'id': entry_id, 'profile_id': profile_id, 'recipe_id': payload.recipe_id,
+                'saved': True, 'synthetic_only': True, 'clinical_use': False}
     except LookupError as exc:
         raise HTTPException(status_code=404, detail='Profile or recipe not found') from exc
     except ValueError as exc:
@@ -450,7 +457,7 @@ def record_profile_meal(profile_id: Annotated[int, Field(gt=0)], payload: Synthe
 
 
 @app.get('/experimental/profiles/{profile_id}/meals')
-def list_profile_meals(profile_id: Annotated[int, Field(gt=0)], day: date,
+def list_profile_meals(profile_id: Annotated[int, Field(gt=0, le=2**63 - 1)], day: date,
                        limit: Annotated[int, Field(ge=1, le=100)] = 50):
     try:
         entries = _meal_store().list_entries(profile_id, day, limit)
@@ -466,12 +473,12 @@ def list_profile_meals(profile_id: Annotated[int, Field(gt=0)], day: date,
 
 
 @app.get('/experimental/profiles/{profile_id}/meals/daily')
-def get_profile_daily_meals(profile_id: Annotated[int, Field(gt=0)], day: date):
+def get_profile_daily_meals(profile_id: Annotated[int, Field(gt=0, le=2**63 - 1)], day: date):
     return _meal_totals_response(profile_id, day, weekly=False)
 
 
 @app.get('/experimental/profiles/{profile_id}/meals/weekly')
-def get_profile_weekly_meals(profile_id: Annotated[int, Field(gt=0)], day: date):
+def get_profile_weekly_meals(profile_id: Annotated[int, Field(gt=0, le=2**63 - 1)], day: date):
     return _meal_totals_response(profile_id, day, weekly=True)
 
 

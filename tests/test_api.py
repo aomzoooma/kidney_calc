@@ -500,10 +500,8 @@ class ExperimentalMealApiTest(unittest.TestCase):
                 'consumed_at': '2026-01-03T17:30:00Z', 'portion': '0.5'}
         saved = self.client.post(f'/experimental/profiles/{self.profile_id}/meals', json=body)
         self.assertEqual(saved.status_code, 200, saved.text)
-        self.assertEqual(saved.json()['local_date'], '2026-01-04')
-        self.assertEqual(saved.json()['portion'], '0.5')
-        self.assertEqual(saved.json()['totals']['energy_kcal'], {'value': '65.0', 'complete': True})
-        self.assertEqual(saved.json()['totals']['protein_g'], {'value': None, 'complete': False})
+        self.assertEqual(saved.json(), {'id': 1, 'profile_id': self.profile_id, 'recipe_id': self.recipe_id,
+                                        'saved': True, 'synthetic_only': True, 'clinical_use': False})
         self.assertTrue(saved.json()['synthetic_only'])
 
         self.client.put(f'/experimental/recipes/{self.recipe_id}/ingredients', json={
@@ -529,16 +527,41 @@ class ExperimentalMealApiTest(unittest.TestCase):
             {**valid, 'synthetic_only': False},
             {**valid, 'patient_id': 'unexpected'},
             {**valid, 'consumed_at': '2026-01-03T17:30:00'},
+            {**valid, 'consumed_at': 0},
+            {**valid, 'consumed_at': '0'},
+            {**valid, 'recipe_id': 9223372036854775808},
             {**valid, 'portion': '0'},
             {**valid, 'portion': '1.01'},
         ):
             self.assertEqual(self.client.post(path, json=body).status_code, 422)
+        offset = self.client.post(path, json={**valid, 'consumed_at': '2026-01-04T00:30:00+09:00'})
+        self.assertEqual(offset.status_code, 200, offset.text)
+        self.assertTrue(offset.json()['saved'])
+        self.assertEqual(offset.json()['id'], 1)
 
     def test_invalid_profile_or_day_rejected(self):
         path = '/experimental/profiles/98765/meals?day=2026-01-04'
         self.assertEqual(self.client.get(path).status_code, 404)
         self.assertEqual(self.client.get(
             f'/experimental/profiles/{self.profile_id}/meals?day=2026-02-30').status_code, 422)
+        self.assertEqual(self.client.get(
+            '/experimental/profiles/9223372036854775808/meals?day=2026-01-04').status_code, 422)
+        self.assertEqual(self.client.get(
+            f'/experimental/profiles/{self.profile_id}/meals/weekly?day=9999-12-31').status_code, 422)
+
+    def test_fresh_profile_can_read_empty_history_and_totals(self):
+        fresh_db = Path(self.temp.name) / 'fresh-synthetic.sqlite'
+        with patch.dict(os.environ, {'KIDNEY_EXPERIMENTAL_DB': str(fresh_db)}):
+            created = self.client.post('/experimental/profiles', json={
+                'synthetic_only': True, 'name': 'Fresh synthetic profile',
+            })
+            profile_id = created.json()['id']
+            history = self.client.get(f'/experimental/profiles/{profile_id}/meals?day=2026-01-04')
+            totals = self.client.get(f'/experimental/profiles/{profile_id}/meals/daily?day=2026-01-04')
+        self.assertEqual(history.status_code, 200, history.text)
+        self.assertEqual(history.json()['items'], [])
+        self.assertEqual(totals.status_code, 200, totals.text)
+        self.assertEqual(totals.json()['entry_count'], 0)
 
 
 if __name__ == '__main__':

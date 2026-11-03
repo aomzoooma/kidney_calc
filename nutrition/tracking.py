@@ -19,8 +19,8 @@ except ZoneInfoNotFoundError as exc:
 
 
 def _positive_id(value, field):
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{field} must be a positive integer")
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 < value <= 2**63 - 1:
+        raise ValueError(f"{field} must be a positive SQLite integer")
     return value
 
 
@@ -441,6 +441,7 @@ class MealTrackingStore:
         if start_text > end_text:
             raise ValueError("period start must not be after end")
         with self._connect() as db:
+            db.execute("BEGIN")
             if db.execute("SELECT 1 FROM patient_profiles WHERE id = ?", (profile_id,)).fetchone() is None:
                 raise LookupError("profile not found")
             count = db.execute(
@@ -483,4 +484,6 @@ class MealTrackingStore:
         """Sum the ISO week containing the Bangkok civil date; weeks run Monday through Sunday."""
         _day(day_in_week)
         monday = day_in_week - timedelta(days=day_in_week.weekday())
+        if monday > date.max - timedelta(days=6):
+            raise ValueError("week exceeds supported date range")
         return self._period_totals(profile_id, monday, monday + timedelta(days=6))

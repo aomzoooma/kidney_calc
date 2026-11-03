@@ -2,6 +2,7 @@
 
 import sqlite3
 import tempfile
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 import unittest
 from datetime import date, datetime, timezone
@@ -101,6 +102,39 @@ class MealTrackingStoreTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.tracking.list_entries(self.profile_id, date(2026, 1, 4), limit=101)
         self.assertIsNotNone(self.tracking.get_entry(first))
+
+    def test_period_totals_use_one_read_snapshot_during_concurrent_write(self):
+        with sqlite3.connect(self.database) as db:
+            db.execute("PRAGMA journal_mode = WAL")
+        original_connect = self.tracking._connect
+        writer = MealTrackingStore(self.database)
+        inserted = False
+
+        class InterleavingConnection:
+            def execute(inner_self, sql, parameters=()):
+                nonlocal inserted
+                cursor = db.execute(sql, parameters)
+                if "SELECT COUNT(*)" in sql and not inserted:
+                    inserted = True
+                    writer.record_consumption(
+                        self.profile_id, self.recipe_ids[0],
+                        datetime(2026, 1, 3, 17, 30, tzinfo=timezone.utc), Decimal("0.5"),
+                    )
+                return cursor
+
+        @contextmanager
+        def interleaved_connect():
+            with original_connect() as db:
+                yield InterleavingConnection()
+
+        self.tracking._connect = interleaved_connect
+        try:
+            before_write_snapshot = self.tracking.get_daily_totals(self.profile_id, date(2026, 1, 4))
+        finally:
+            self.tracking._connect = original_connect
+        self.assertEqual(before_write_snapshot["entry_count"], 0)
+        self.assertIsNone(before_write_snapshot["totals"]["energy_kcal"][0])
+        self.assertEqual(self.tracking.get_daily_totals(self.profile_id, date(2026, 1, 4))["entry_count"], 1)
 
     def test_daily_and_iso_week_totals_use_bangkok_day_and_propagate_unknown(self):
         # 16:59 UTC is 23:59 Sunday in Bangkok; 17:01 UTC is Monday 00:01.
