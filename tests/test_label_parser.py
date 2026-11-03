@@ -290,6 +290,45 @@ Sodium 10 mg
         self.assertTrue(result.basis_conflict)
         self.assertIsNone(result.nutrients["sodium_mg"].value)
 
+    def test_html_mode_ignores_script_style_figure_and_outside_table_text(self):
+        script_only = parse_nutrition_label(
+            "<script>\nNutrition per serving\nSodium 90 mg\n</script>"
+        )
+        self.assertTrue(all(item.value is None for item in script_only.nutrients.values()))
+
+        result = parse_nutrition_label("""
+Nutrition per serving
+Sodium 10 mg
+<script>\nNutrition per serving\nSodium 20 mg\n</script>
+<style>Nutrition per serving Sodium 30 mg</style>
+<figure>Nutrition per serving Sodium 40 mg</figure>
+<table></table>
+""")
+        self.assertTrue(all(item.value is None for item in result.nutrients.values()))
+
+        outside_value = parse_nutrition_label("""
+Nutrition per serving
+Sodium 10 mg
+<table><tr><th>Nutrition per serving</th></tr></table>
+""")
+        self.assertIsNone(outside_value.nutrients["sodium_mg"].value)
+
+    def test_html_table_ambiguous_columns_and_structure_yield_no_suggestions(self):
+        ambiguous = (
+            '<tr><td>Sodium</td><td></td><td>80 mg</td></tr>',
+            '<tr><td colspan="2">Sodium 80 mg</td></tr>',
+            '<tr><td rowspan="2">Sodium</td><td>80 mg</td></tr>',
+            '<tr><td>Sodium</td><td>80</td><td>mg</td></tr>',
+            '<tr><td>Sodium</td><td><table><tr><td>80 mg</td></tr></table></td></tr>',
+            '<tr><td>Sodium</td><td>80 mg</td></table>',
+        )
+        for row in ambiguous:
+            with self.subTest(row=row):
+                result = parse_nutrition_label(
+                    f'<table><tr><th>Nutrition per serving</th></tr>{row}</table>'
+                )
+                self.assertTrue(all(item.value is None for item in result.nutrients.values()))
+
 
 if __name__ == "__main__":
     unittest.main()
