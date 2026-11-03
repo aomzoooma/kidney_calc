@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from auth_test_config import AuthTestClient
 from api.main import app, _demo_store
 from nutrition.profiles import ProfileStore
 from nutrition.recipes import RecipeStore
@@ -24,7 +25,7 @@ class RecipeApiTest(unittest.TestCase):
         self.env = patch.dict('os.environ', {'KIDNEY_EXPERIMENTAL_DB': str(Path(self.temp.name) / 'synthetic.db')})
         self.env.start()
         self.addCleanup(self.env.stop)
-        self.client = TestClient(app, client=('127.0.0.1', 1234), base_url='http://127.0.0.1')
+        self.client = AuthTestClient(app)
         self.rice = self.save_ingredient('Rice', '100', {'protein_g': '4', 'sodium_mg': '0'})
         self.sauce = self.save_ingredient('Sauce', '10', {'protein_g': None, 'sodium_mg': '20'})
 

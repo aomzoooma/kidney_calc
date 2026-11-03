@@ -3,13 +3,14 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
+from auth_test_config import AuthTestClient
 from api.main import app
 from api.ocr import OCRResult, OCRServiceError
 
 
 class OCRApiTest(unittest.TestCase):
     def setUp(self):
-        self.client = TestClient(app, client=('127.0.0.1', 12345), base_url='http://127.0.0.1')
+        self.client = AuthTestClient(app)
         self.payload = {'synthetic_only': True, 'content_type': 'image/png', 'image_base64': base64.b64encode(b'test').decode()}
 
     def test_result_is_untrusted_and_never_saved(self):

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 from fastapi.testclient import TestClient
 
+from auth_test_config import AuthTestClient
 from api.main import app
 from nutrition.local_translation import (
     DEFAULT_TRANSLATION_MODEL,
@@ -142,7 +143,7 @@ class LocalTranslationServiceTest(unittest.IsolatedAsyncioTestCase):
 
 class LocalTranslationApiTest(unittest.TestCase):
     def setUp(self):
-        self.client = TestClient(app, client=("127.0.0.1", 12345), base_url="http://127.0.0.1")
+        self.client = AuthTestClient(app)
 
     def test_accepts_only_text_and_direction_and_reports_loopback_transport(self):
         with patch("api.main.translate_food_text", new_callable=AsyncMock,

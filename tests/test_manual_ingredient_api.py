@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from auth_test_config import AuthTestClient
 from api.main import app
 
 
@@ -17,7 +18,7 @@ class ManualIngredientApiTest(unittest.TestCase):
         self.env = patch.dict(os.environ, {'KIDNEY_EXPERIMENTAL_DB': str(database)})
         self.env.start()
         self.addCleanup(self.env.stop)
-        self.client = TestClient(app, client=('127.0.0.1', 12345), base_url='http://127.0.0.1')
+        self.client = AuthTestClient(app)
         self.payload = {
             'synthetic_only': True, 'reviewed': True, 'name': 'ข้าวทดสอบ',
             'provider': 'Synthetic publisher', 'source_version': 'fixture-v1',

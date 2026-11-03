@@ -7,6 +7,7 @@ import binascii
 import hashlib
 import json
 import os
+import secrets
 import sqlite3
 import tempfile
 import threading
@@ -17,9 +18,9 @@ from typing import Annotated, Literal, Optional
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictBool, StrictInt, ValidationError, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictBool, StrictInt, StrictStr, ValidationError, model_validator
 
 from nutrition.calculator import NUTRIENTS, Measure, NutrientSource, calculate
 from nutrition.label_parser import parse_nutrition_label
@@ -29,6 +30,10 @@ from nutrition.profiles import ProfileStore
 from api.ocr import MAX_IMAGE_BYTES, OCRServiceError, ocr_image
 from nutrition.local_translation import LocalTranslationError, translate_food_text
 from nutrition.usda_fdc import USDAFDCClient, USDAFDCError
+from pwdlib import PasswordHash
+from api.auth import (AuthCsrfLimiter, AuthLimiter, AuthSessions, AuthSessionMiddleware,
+                      csrf_bootstrap_valid, csrf_origin_valid,
+                      csrf_token, load_auth_config)
 
 
 def _json_decimal(value):
@@ -129,6 +134,19 @@ class SavedRecipeOpenInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     synthetic_only: Literal[True]
+
+
+class LoginInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: StrictStr = Field(min_length=1, max_length=128)
+    password: StrictStr = Field(min_length=1, max_length=1024)
+
+
+class LoginConfirmInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    login_ticket: StrictStr = Field(min_length=32, max_length=128)
 
 
 class OCRInput(BaseModel):
@@ -311,6 +329,15 @@ def _suggestions(text):
 
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+_auth_config = load_auth_config()
+_auth_password = PasswordHash.recommended() if _auth_config.enabled else None
+if (_auth_config.enabled and not _auth_password.current_hasher.identify(
+        _auth_config.admin_password_hash)):
+    raise RuntimeError("ADMIN_PASSWORD_HASH must be a supported Argon2id hash")
+_auth_limiter = AuthLimiter()
+_auth_sessions = AuthSessions()
+_auth_csrf_limiter = AuthCsrfLimiter()
+_SESSION_TTL_SECONDS = 8 * 60 * 60
 _demo_store_lock = threading.Lock()
 # Experimental single-process cache: inode identity catches atomic replacements,
 # but not in-place resets; separate worker processes do not share this lock/cache.
@@ -449,7 +476,136 @@ async def localhost_only(request: Request, call_next):
             return JSONResponse(status_code=403, content={"detail": "Localhost Origin required"})
         if origin_host != host or origin_port != host_parts.port:
             return JSONResponse(status_code=403, content={"detail": "Origin and Host must match"})
+    if (_auth_config.enabled and (request.url.path == "/experimental"
+            or request.url.path.startswith("/experimental/"))):
+        if not _is_authenticated(request):
+            return JSONResponse(status_code=401, content={"detail": "Authentication required"})
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            token = csrf_token(request)
+            if (not csrf_origin_valid(request, _auth_config.auth_origin)
+                    or not _auth_sessions.consume_write_nonce(token, request.session["sid"])):
+                return JSONResponse(status_code=403, content={"detail": "Invalid request"})
     return await call_next(request)
+
+
+@app.get("/auth/csrf")
+def get_auth_csrf(request: Request, response: Response, purpose: Literal["login", "write"] = "login"):
+    if not _auth_config.enabled:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not csrf_bootstrap_valid(request, _auth_config.auth_origin):
+        raise HTTPException(status_code=403, detail="Invalid request")
+    client_key = request.client.host if request.client is not None else ""
+    if not _auth_csrf_limiter.allow(client_key):
+        raise HTTPException(status_code=429, detail="Too many authentication requests")
+    session_id = _current_session_id(request)
+    token = _auth_sessions.issue_csrf(session_id, purpose, client_key)
+    if token is None:
+        raise HTTPException(status_code=429, detail="Authentication transition is unavailable")
+    response.headers["Cache-Control"] = "no-store"
+    return {"csrf_token": token, "purpose": purpose}
+
+
+@app.post("/auth/login")
+def login(payload: LoginInput, request: Request):
+    if not _auth_config.enabled:
+        raise HTTPException(status_code=404, detail="Not found")
+    token = csrf_token(request)
+    client_session_id = _current_session_id(request)
+    if (not csrf_origin_valid(request, _auth_config.auth_origin)
+            or not _auth_sessions.valid_login_nonce(token, client_session_id)):
+        raise HTTPException(status_code=403, detail="Invalid request")
+    reservation = _auth_limiter.reserve("admin")
+    if reservation is None:
+        raise HTTPException(status_code=429, detail="Too many attempts")
+    try:
+        expected_epoch = _auth_sessions.begin_login()
+        password_valid = _auth_password.verify(payload.password, _auth_config.admin_password_hash)
+        username_valid = secrets.compare_digest(payload.username.encode("utf-8"),
+                                                _auth_config.admin_username.encode("utf-8"))
+    except Exception:
+        _auth_limiter.release("admin", reservation)
+        raise
+    if not username_valid or not password_valid:
+        _auth_limiter.failed("admin", reservation)
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    _auth_limiter.succeeded("admin", reservation)
+    ticket = _auth_sessions.prepare_login(token, client_session_id, expected_epoch)
+    if ticket is None:
+        raise HTTPException(status_code=409, detail="Authentication changed; sign in again")
+    return {"login_ticket": ticket, "confirmation_required": True}
+
+
+def _is_authenticated(request: Request) -> bool:
+    session_id = request.session.get("sid")
+    expires_at = request.session.get("exp")
+    return (request.session.get("admin") is True and isinstance(session_id, str)
+            and isinstance(expires_at, int) and not isinstance(expires_at, bool)
+            and _auth_sessions.valid(session_id, expires_at))
+
+
+def _current_session_id(request: Request) -> str | None:
+    session_id = request.session.get("sid")
+    expires_at = request.session.get("exp")
+    if (request.session.get("admin") is True and isinstance(session_id, str)
+            and isinstance(expires_at, int) and not isinstance(expires_at, bool)
+            and _auth_sessions.valid(session_id, expires_at)):
+        return session_id
+    return None
+
+
+@app.post("/auth/confirm")
+def confirm_login(payload: LoginConfirmInput, request: Request):
+    if not _auth_config.enabled:
+        raise HTTPException(status_code=404, detail="Not found")
+    token = csrf_token(request)
+    if not csrf_origin_valid(request, _auth_config.auth_origin):
+        raise HTTPException(status_code=403, detail="Invalid request")
+    confirmed = _auth_sessions.confirm_login(payload.login_ticket, token, _SESSION_TTL_SECONDS)
+    if confirmed is None:
+        raise HTTPException(status_code=409, detail="Login ticket is invalid or expired")
+    issued, ack_token = confirmed
+    request.session.clear()
+    request.session.update({"admin": True, "sid": issued.session_id, "exp": issued.expires_at})
+    request.state.auth_cookie_confirm = True
+    return {"authenticated": True, "acknowledgment_required": True, "csrf_token": ack_token}
+
+
+@app.post("/auth/ack", status_code=204)
+def acknowledge_auth_session(request: Request):
+    if not _auth_config.enabled:
+        raise HTTPException(status_code=404, detail="Not found")
+    session_id = request.session.get("sid")
+    expires_at = request.session.get("exp")
+    token = csrf_token(request)
+    if (not isinstance(session_id, str) or not isinstance(expires_at, int)
+            or isinstance(expires_at, bool) or not csrf_origin_valid(request, _auth_config.auth_origin)
+            or not _auth_sessions.acknowledge(session_id, expires_at, token)):
+        raise HTTPException(status_code=401, detail="Authentication confirmation required")
+    return Response(status_code=204)
+
+
+@app.get("/auth/me")
+def whoami(request: Request):
+    if not _auth_config.enabled:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return {"authenticated": True, "username": _auth_config.admin_username}
+
+
+@app.post("/auth/logout", status_code=204)
+def logout(request: Request):
+    if not _auth_config.enabled:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    token = csrf_token(request)
+    if (not csrf_origin_valid(request, _auth_config.auth_origin)
+            or not _auth_sessions.consume_write_nonce(token, request.session["sid"])):
+        raise HTTPException(status_code=403, detail="Invalid request")
+    if not _auth_sessions.revoke(request.session["sid"]):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return Response(status_code=204)
 
 
 @app.get("/health")
@@ -869,3 +1025,8 @@ def delete_saved_recipe(recipe_id: int, synthetic_only: Literal["true"] = Query(
         raise HTTPException(status_code=409, detail='Recipe is referenced by saved meal history') from exc
     except sqlite3.Error as exc:
         raise HTTPException(status_code=503, detail='Recipe storage is unavailable') from exc
+
+
+if _auth_config.enabled:
+    app = AuthSessionMiddleware(app, _auth_config.session_secret, _SESSION_TTL_SECONDS,
+                                _auth_config.cookie_secure)

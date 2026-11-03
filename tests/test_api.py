@@ -13,6 +13,7 @@ import httpx
 
 from fastapi.testclient import TestClient
 
+from auth_test_config import AUTH_ORIGIN, AuthTestClient, TEST_PASSWORD
 from api.main import app, _demo_store
 from nutrition.usda_fdc import USDAFDCError
 
@@ -28,7 +29,7 @@ class HealthTest(unittest.TestCase):
 
 class ExperimentalRecipeApiTest(unittest.TestCase):
     def setUp(self):
-        self.client = TestClient(app, client=("127.0.0.1", 12345), base_url="http://127.0.0.1")
+        self.client = AuthTestClient(app)
         self.payload = {
             "synthetic_only": True,
             "portion": "0.5",
@@ -229,7 +230,7 @@ class LocalThaiIngredientSearchTest(unittest.TestCase):
         self.env = patch.dict(os.environ, {'KIDNEY_EXPERIMENTAL_DB': str(self.db_path)})
         self.env.start()
         self.addCleanup(self.env.stop)
-        self.client = TestClient(app, client=('127.0.0.1', 12345), base_url='http://127.0.0.1')
+        self.client = AuthTestClient(app)
         self.store = _demo_store().ingredients
         self.reviewed_id = self.store.create_ingredient('ข้าวสมมติ')
         self.reviewed_version = self.store.add_version(
@@ -397,7 +398,7 @@ class ExperimentalProfileApiTest(unittest.TestCase):
         self.env = patch.dict(os.environ, {'KIDNEY_EXPERIMENTAL_DB': str(self.db_path)})
         self.env.start()
         self.addCleanup(self.env.stop)
-        self.client = TestClient(app, client=('127.0.0.1', 12345), base_url='http://127.0.0.1')
+        self.client = AuthTestClient(app)
 
     def test_synthetic_profile_goals_and_weights_survive_reload_in_experimental_db(self):
         created = self.client.post('/experimental/profiles', json={
