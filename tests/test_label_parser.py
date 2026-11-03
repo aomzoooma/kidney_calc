@@ -255,6 +255,100 @@ Sodium 10 mg
 """)
         self.assertIsNone(result.nutrients["sodium_mg"].value)
 
+    def test_parses_explicit_thai_html_table_rows(self):
+        result = parse_nutrition_label("""
+<table>
+  <tr><th>หนึ่งหน่วยบริโภค 30 กรัม</th></tr>
+  <tr><th>คุณค่าทางโภชนาการต่อหนึ่งหน่วยบริโภค</th></tr>
+  <tr><td>โปรตีน</td><td>4 กรัม</td></tr>
+  <tr><td>โซเดียม</td><td>80 มิลลิกรัม</td></tr>
+</table>
+""")
+        self.assertEqual(result.serving_basis.value, Decimal("30"))
+        self.assertEqual(result.serving_basis.unit, "g")
+        self.assertEqual(result.nutrients["protein_g"].value, Decimal("4"))
+        self.assertEqual(result.nutrients["sodium_mg"].value, Decimal("80"))
+
+    def test_html_table_missing_basis_and_duplicate_rows_stay_unknown(self):
+        no_basis = parse_nutrition_label("<table><tr><td>Protein</td><td>3 g</td></tr></table>")
+        self.assertIsNone(no_basis.nutrients["protein_g"].value)
+
+        duplicate = parse_nutrition_label("""
+<table><tr><th>Nutrition per serving</th></tr>
+<tr><td>Sodium</td><td>10 mg</td></tr>
+<tr><td>Sodium</td><td>10 mg</td></tr></table>
+""")
+        self.assertIsNone(duplicate.nutrients["sodium_mg"].value)
+
+    def test_html_table_conflicting_headers_and_script_text_do_not_supply_values(self):
+        result = parse_nutrition_label("""
+<script>Nutrition per serving Sodium 1 mg</script>
+<table><tr><th>Nutrition per serving</th></tr>
+<tr><th>Nutrition per 100 g</th></tr>
+<tr><td>Sodium</td><td>80 mg</td></tr></table>
+""")
+        self.assertTrue(result.basis_conflict)
+        self.assertIsNone(result.nutrients["sodium_mg"].value)
+
+    def test_html_mode_ignores_script_style_figure_and_outside_table_text(self):
+        script_only = parse_nutrition_label(
+            "<script>\nNutrition per serving\nSodium 90 mg\n</script>"
+        )
+        self.assertTrue(all(item.value is None for item in script_only.nutrients.values()))
+
+        result = parse_nutrition_label("""
+Nutrition per serving
+Sodium 10 mg
+<script>\nNutrition per serving\nSodium 20 mg\n</script>
+<style>Nutrition per serving Sodium 30 mg</style>
+<figure>Nutrition per serving Sodium 40 mg</figure>
+<table></table>
+""")
+        self.assertTrue(all(item.value is None for item in result.nutrients.values()))
+
+        outside_value = parse_nutrition_label("""
+Nutrition per serving
+Sodium 10 mg
+<table><tr><th>Nutrition per serving</th></tr></table>
+""")
+        self.assertIsNone(outside_value.nutrients["sodium_mg"].value)
+
+    def test_html_table_ambiguous_columns_and_structure_yield_no_suggestions(self):
+        ambiguous = (
+            '<tr><td>Sodium</td><td></td><td>80 mg</td></tr>',
+            '<tr><td colspan="2">Sodium 80 mg</td></tr>',
+            '<tr><td rowspan="2">Sodium</td><td>80 mg</td></tr>',
+            '<tr><td>Sodium</td><td>80</td><td>mg</td></tr>',
+            '<tr><td>Sodium</td><td><table><tr><td>80 mg</td></tr></table></td></tr>',
+            '<tr><td>Sodium</td><td>80 mg</td></table>',
+        )
+        for row in ambiguous:
+            with self.subTest(row=row):
+                result = parse_nutrition_label(
+                    f'<table><tr><th>Nutrition per serving</th></tr>{row}</table>'
+                )
+                self.assertTrue(all(item.value is None for item in result.nutrients.values()))
+
+    def test_html_basis_header_row_cannot_hide_nutrient_value(self):
+        result = parse_nutrition_label("""
+<table>
+<tr><td>Serving size 30 g</td></tr>
+<tr><td>Sodium 10 mg</td><td>Nutrition per serving</td></tr>
+<tr><td>Sodium</td><td>80 mg</td></tr>
+</table>
+""")
+        self.assertTrue(all(item.value is None for item in result.nutrients.values()))
+
+    def test_html_text_outside_cells_and_unsupported_markup_fail_closed(self):
+        for body in (
+            '<tr>Sodium 10 mg</tr><tr><td>Sodium</td><td>80 mg</td></tr>',
+            '<tr><td><b>Sodium</b></td><td>80 mg</td></tr>',
+            '<thead><tr><th>Nutrition per serving</th></tr><tr><td>Sodium</td><td>80 mg</td></tr>',
+        ):
+            with self.subTest(body=body):
+                result = parse_nutrition_label(f'<table>{body}</table>')
+                self.assertTrue(all(item.value is None for item in result.nutrients.values()))
+
 
 if __name__ == "__main__":
     unittest.main()

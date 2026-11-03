@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from html.parser import HTMLParser
 import re
 from typing import Optional
 
@@ -32,6 +33,7 @@ class LabelParse:
 
 _NUMBER = r"(\d[\d.,]*)"
 _UNIT = r"([a-zA-Zก-๙.]+)"
+_HTML_TAG = re.compile(r"</?[a-z][^>]*>", re.I)
 _NUTRIENTS = {
     "energy_kcal": (r"energy|พลังงาน", {"kcal": "kcal", "กิโลแคลอรี": "kcal"}),
     "protein_g": (r"protein|โปรตีน", {"g": "g", "กรัม": "g"}),
@@ -49,6 +51,149 @@ _BASIS_TEXT = re.compile(r"\bper\s+(?:one\s+)?serving\b|\bper\s*100\s*(?:g|grams
 _BOUND = re.compile(r"\bor\s+(?:less|more|lower|higher)\b|\bless\s+than\b|\b(?:at\s+most|at\s+least)\b|หรือน้อยกว่า|หรือต่ำกว่า|หรือมากกว่า|ไม่เกิน|ไม่น้อยกว่า|อย่างน้อย|ขึ้นไป", re.I)
 _GDA = re.compile(r"\bGDA\b|ร้อยละ|%Thai\s*RDI", re.I)
 _INEQUALITY = re.compile(r"[<>≤≥]\s*\d")
+
+
+class _TableText(HTMLParser):
+    """Collect text from HTML table cells only; HTMLParser does not fetch entities."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.table_depth = 0
+        self.ignored_depth = 0
+        self.cell: Optional[list[str]] = None
+        self.cell_tag: Optional[str] = None
+        self.row: Optional[list[str]] = None
+        self.rows: list[list[str]] = []
+        self.sections: list[str] = []
+        self.table_count = 0
+        self.invalid = False
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag in {"script", "style", "figure"}:
+            if self.table_depth:
+                self.invalid = True
+            if self.cell is not None:
+                self.cell.append(" ")
+            self.ignored_depth += 1
+            return
+        if self.ignored_depth:
+            return
+        if self.table_depth:
+            if tag in {"thead", "tbody", "tfoot"}:
+                if self.row is not None or self.cell is not None or self.sections:
+                    self.invalid = True
+                self.sections.append(tag)
+            elif tag == "tr":
+                if self.row is not None or self.cell is not None:
+                    self.invalid = True
+                self.row = []
+            elif tag in {"td", "th"}:
+                if (self.row is None or self.cell is not None
+                        or any(name in {"colspan", "rowspan"} for name, _ in attrs)):
+                    self.invalid = True
+                self.cell = []
+                self.cell_tag = tag
+            elif tag == "br" and self.cell is not None:
+                self.cell.append(" ")
+            else:
+                self.invalid = True
+            return
+        if tag == "table":
+            if self.table_count:
+                self.invalid = True
+                return
+            self.table_depth = 1
+            self.table_count += 1
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        if tag == "br" and self.table_depth:
+            if self.cell is None:
+                self.invalid = True
+            else:
+                self.cell.append(" ")
+        else:
+            super().handle_startendtag(tag, attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style", "figure"} and self.ignored_depth:
+            self.ignored_depth -= 1
+            if not self.ignored_depth and self.cell is not None:
+                self.cell.append(" ")
+            return
+        if self.ignored_depth:
+            return
+        if self.table_depth:
+            if tag == "table":
+                if self.row is not None or self.cell is not None or self.sections:
+                    self.invalid = True
+                self.table_depth = 0
+            elif tag in {"td", "th"}:
+                if self.cell is None or self.row is None or self.cell_tag != tag:
+                    self.invalid = True
+                    return
+                self.row.append(re.sub(r"\s+", " ", "".join(self.cell)).strip())
+                self.cell = None
+                self.cell_tag = None
+            elif tag == "tr":
+                if self.row is None or self.cell is not None:
+                    self.invalid = True
+                    return
+                self.rows.append(self.row)
+                self.row = None
+            elif tag in {"thead", "tbody", "tfoot"}:
+                if not self.sections or self.sections[-1] != tag or self.row is not None or self.cell is not None:
+                    self.invalid = True
+                    return
+                self.sections.pop()
+            else:
+                self.invalid = True
+        elif tag == "table":
+            self.invalid = True
+
+    def handle_data(self, data: str) -> None:
+        if self.table_depth and not self.ignored_depth:
+            if self.cell is not None:
+                self.cell.append(data)
+            elif data.strip():
+                self.invalid = True
+
+
+def _html_table_lines(text: str) -> list[str]:
+    parser = _TableText()
+    parser.feed(text)
+    parser.close()
+    if (parser.invalid or parser.table_count != 1 or parser.table_depth or parser.row
+            or parser.cell or parser.sections):
+        return []
+    lines = []
+    for row in parser.rows:
+        cells = row  # Keep empty positions; dropping one can shift values into the wrong column.
+        if not cells:
+            continue
+        if len(cells) > 2:
+            return []
+        # A header cell can share its row with a label cell; keep the recognized
+        # basis exact so conservative header validation remains effective.
+        headers = [cell for cell in cells if _header_basis(cell) is not None]
+        if headers:
+            if any(
+                cell not in headers and (
+                    re.search(r"\d", cell)
+                    or _SERVING_START.match(cell)
+                    or any(_is_nutrient_start(cell, label) for label, _ in _NUTRIENTS.values())
+                )
+                for cell in cells
+            ):
+                return []
+            lines.extend(headers)
+        elif len(cells) == 1:
+            lines.append(cells[0])
+        elif cells[0] and (
+            _SERVING_START.match(cells[0])
+            or any(_is_nutrient_start(cells[0], label) for label, _ in _NUTRIENTS.values())
+        ):
+            lines.append(" ".join(cells))
+    return lines
 
 
 def _decimal(text: str) -> Decimal:
@@ -135,6 +280,8 @@ def parse_nutrition_label(text: str) -> LabelParse:
     """Parse exact whole-line values; missing or ambiguous fields stay unknown."""
     if not isinstance(text, str):
         raise TypeError("OCR text must be a string")
+    if _HTML_TAG.search(text):
+        text = "\n".join(_html_table_lines(text))
     serving = _serving_basis(text)
     shared_basis, conflicting_headers = _shared_basis(text)
     occurrences = {key: 0 for key in _NUTRIENTS}
