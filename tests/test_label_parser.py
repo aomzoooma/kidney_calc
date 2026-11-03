@@ -255,6 +255,41 @@ Sodium 10 mg
 """)
         self.assertIsNone(result.nutrients["sodium_mg"].value)
 
+    def test_parses_explicit_thai_html_table_rows(self):
+        result = parse_nutrition_label("""
+<table>
+  <tr><th>หนึ่งหน่วยบริโภค 30 กรัม</th></tr>
+  <tr><th>คุณค่าทางโภชนาการต่อหนึ่งหน่วยบริโภค</th></tr>
+  <tr><td>โปรตีน</td><td>4 กรัม</td></tr>
+  <tr><td>โซเดียม</td><td>80 มิลลิกรัม</td></tr>
+</table>
+""")
+        self.assertEqual(result.serving_basis.value, Decimal("30"))
+        self.assertEqual(result.serving_basis.unit, "g")
+        self.assertEqual(result.nutrients["protein_g"].value, Decimal("4"))
+        self.assertEqual(result.nutrients["sodium_mg"].value, Decimal("80"))
+
+    def test_html_table_missing_basis_and_duplicate_rows_stay_unknown(self):
+        no_basis = parse_nutrition_label("<table><tr><td>Protein</td><td>3 g</td></tr></table>")
+        self.assertIsNone(no_basis.nutrients["protein_g"].value)
+
+        duplicate = parse_nutrition_label("""
+<table><tr><th>Nutrition per serving</th></tr>
+<tr><td>Sodium</td><td>10 mg</td></tr>
+<tr><td>Sodium</td><td>10 mg</td></tr></table>
+""")
+        self.assertIsNone(duplicate.nutrients["sodium_mg"].value)
+
+    def test_html_table_conflicting_headers_and_script_text_do_not_supply_values(self):
+        result = parse_nutrition_label("""
+<script>Nutrition per serving Sodium 1 mg</script>
+<table><tr><th>Nutrition per serving</th></tr>
+<tr><th>Nutrition per 100 g</th></tr>
+<tr><td>Sodium</td><td>80 mg</td></tr></table>
+""")
+        self.assertTrue(result.basis_conflict)
+        self.assertIsNone(result.nutrients["sodium_mg"].value)
+
 
 if __name__ == "__main__":
     unittest.main()

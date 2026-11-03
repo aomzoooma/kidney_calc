@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from html.parser import HTMLParser
 import re
 from typing import Optional
 
@@ -49,6 +50,69 @@ _BASIS_TEXT = re.compile(r"\bper\s+(?:one\s+)?serving\b|\bper\s*100\s*(?:g|grams
 _BOUND = re.compile(r"\bor\s+(?:less|more|lower|higher)\b|\bless\s+than\b|\b(?:at\s+most|at\s+least)\b|หรือน้อยกว่า|หรือต่ำกว่า|หรือมากกว่า|ไม่เกิน|ไม่น้อยกว่า|อย่างน้อย|ขึ้นไป", re.I)
 _GDA = re.compile(r"\bGDA\b|ร้อยละ|%Thai\s*RDI", re.I)
 _INEQUALITY = re.compile(r"[<>≤≥]\s*\d")
+
+
+class _TableText(HTMLParser):
+    """Collect text from HTML table cells only; HTMLParser does not fetch entities."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.table_depth = 0
+        self.ignored_depth = 0
+        self.cell: Optional[list[str]] = None
+        self.row: Optional[list[str]] = None
+        self.rows: list[list[str]] = []
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag in {"script", "style"}:
+            self.ignored_depth += 1
+        if self.ignored_depth:
+            return
+        if tag == "table":
+            self.table_depth += 1
+        elif self.table_depth and tag == "tr":
+            self.row = []
+        elif self.table_depth and tag in {"td", "th"}:
+            self.cell = []
+        elif self.table_depth and tag == "br" and self.cell is not None:
+            self.cell.append(" ")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style"} and self.ignored_depth:
+            self.ignored_depth -= 1
+            return
+        if self.ignored_depth:
+            return
+        if self.table_depth and tag in {"td", "th"} and self.cell is not None:
+            value = re.sub(r"\s+", " ", "".join(self.cell)).strip()
+            if self.row is not None:
+                self.row.append(value)
+            self.cell = None
+        elif self.table_depth and tag == "tr" and self.row is not None:
+            self.rows.append(self.row)
+            self.row = None
+        elif tag == "table" and self.table_depth:
+            self.table_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self.table_depth and not self.ignored_depth and self.cell is not None:
+            self.cell.append(data)
+
+
+def _html_table_lines(text: str) -> list[str]:
+    parser = _TableText()
+    parser.feed(text)
+    parser.close()
+    lines = []
+    for row in parser.rows:
+        cells = [cell for cell in row if cell]
+        if not cells:
+            continue
+        # A header cell can share its row with a label cell; keep the recognized
+        # basis exact so conservative header validation remains effective.
+        headers = [cell for cell in cells if _header_basis(cell) is not None]
+        lines.extend(headers or [" ".join(cells)])
+    return lines
 
 
 def _decimal(text: str) -> Decimal:
@@ -135,6 +199,8 @@ def parse_nutrition_label(text: str) -> LabelParse:
     """Parse exact whole-line values; missing or ambiguous fields stay unknown."""
     if not isinstance(text, str):
         raise TypeError("OCR text must be a string")
+    if "<table" in text.lower():
+        text = "\n".join((text, *_html_table_lines(text)))
     serving = _serving_basis(text)
     shared_basis, conflicting_headers = _shared_basis(text)
     occurrences = {key: 0 for key in _NUTRIENTS}
