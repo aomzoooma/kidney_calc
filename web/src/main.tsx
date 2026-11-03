@@ -1042,7 +1042,11 @@ export function App() {
             <button type="button" className="submit-button" disabled={!canSaveRecipe || recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || recipeFavoriteBusyId !== null || usdaReview?.saving === true} onClick={() => void saveRecipe()}>{recipeSaveBusy ? 'กำลังบันทึก…' : savedRecipeId === null ? 'บันทึกสูตร' : 'บันทึกการเปลี่ยนแปลง'}</button>
           </section>
           <section className="portion-card"><label htmlFor="portion">สัดส่วนของสูตรที่รับประทาน</label><div><input id="portion" disabled={recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving === true} required inputMode="decimal" type="number" min="0.00000001" max="1" step="any" value={portion} onChange={e => { if (recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving) return; revision.current++; setRecipeDraftChanged(true); setPortion(e.target.value); setResult(null) }} /><span>0.5 = ครึ่งสูตร · 1 = สูตรทั้งหมด</span></div></section>
-          {recipeTemplateReviewRequired && <label className="attestation"><input type="checkbox" checked={recipeTemplateReviewed} onChange={event => setRecipeTemplateReviewed(event.target.checked)} /> ตรวจชื่อ สภาพอาหาร หน่วย ปริมาณ และแหล่งข้อมูลทุกแถวแล้ว · สารอาหารที่ไม่ทราบยังเว้นว่าง</label>}
+          {recipeTemplateReviewRequired && <label className="attestation"><input type="checkbox" checked={recipeTemplateReviewed} disabled={busy || recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving === true} onChange={event => {
+            if (busy || recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving) return
+            revision.current++
+            setRecipeTemplateReviewed(event.target.checked); setResult(null); setError('')
+          }} /> ตรวจชื่อ สภาพอาหาร หน่วย ปริมาณ และแหล่งข้อมูลทุกแถวแล้ว · สารอาหารที่ไม่ทราบยังเว้นว่าง</label>}
           <label className="attestation"><input type="checkbox" required /> ยืนยันว่ากำลังทดสอบด้วยสูตรสมมติ ไม่ใช่อาหารหรือข้อมูลผู้ป่วยจริง</label>
           <button className="submit-button" type="submit" disabled={busy || recipeSaveBusy || recipeOpenBusyId !== null || manualSnapshotBusyIndex !== null || usdaReview?.saving === true || (recipeTemplateReviewRequired && (!recipeTemplateReviewed || !recipeTemplateFieldsValid))}>{busy ? 'กำลังคำนวณ…' : 'คำนวณสารอาหาร'}</button>
         </form>

@@ -106,6 +106,10 @@ it('resets template review after adding saved or USDA ingredients', async () => 
 })
 
 it('requires review before saving template as independent recipe, then reopens reviewed source', async () => {
+  let finishRecipeSave!: () => void
+  const pendingRecipeSave = new Promise<{ ok: boolean; json: () => Promise<{ id: number }> }>(resolve => {
+    finishRecipeSave = () => resolve({ ok: true, json: async () => ({ id: 25 }) })
+  })
   const detail = {
     id: 25, name: 'ข้าวผัด (Khao Pad)', favorite: false,
     ingredients: [{ ingredient_version_id: 7, seasoning_version_id: null, amount: '100', unit: 'g',
@@ -115,7 +119,7 @@ it('requires review before saving template as independent recipe, then reopens r
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     if (url === '/experimental/ingredients' && init?.method === 'POST') return { ok: true, json: async () => ({ version_id: 7 }) }
-    if (url === '/experimental/recipes' && init?.method === 'POST') return { ok: true, json: async () => ({ id: 25 }) }
+    if (url === '/experimental/recipes' && init?.method === 'POST') return pendingRecipeSave
     if (url === '/experimental/recipes/25') return { ok: true, json: async () => detail }
     return { ok: true, json: async () => ({ items: [] }) }
   }))
@@ -146,6 +150,10 @@ it('requires review before saving template as independent recipe, then reopens r
   fireEvent.click(review)
   expect(save).toHaveProperty('disabled', false)
   fireEvent.click(save)
+  expect(review).toHaveProperty('disabled', true)
+  fireEvent.click(review)
+  expect(review).toHaveProperty('checked', true)
+  finishRecipeSave()
   await screen.findByText(/บันทึกสูตร “ข้าวผัด/)
   fireEvent.click(screen.getByRole('button', { name: 'เปิดสูตรนี้' }))
   await screen.findByText(/เปิดสูตร “ข้าวผัด/)
@@ -153,3 +161,43 @@ it('requires review before saving template as independent recipe, then reopens r
   expect(screen.queryByLabelText(/ตรวจชื่อ สภาพอาหาร หน่วย ปริมาณ/)).toBeNull()
   expect(screen.getByRole('button', { name: 'คำนวณสารอาหาร' })).toHaveProperty('disabled', false)
 })
+
+it('locks review during deferred calculation and clears result when review is revoked', async () => {
+  let finishCalculation!: () => void
+  const totals = Object.fromEntries(['energy_kcal', 'protein_g', 'sodium_mg', 'potassium_mg', 'phosphorus_mg']
+    .map(key => [key, { value: null, complete: false }]))
+  const pendingCalculation = new Promise<{ ok: boolean; json: () => Promise<unknown> }>(resolve => {
+    finishCalculation = () => resolve({ ok: true, json: async () => ({
+      experimental: true, clinical_use: false, rounding: 'none', portion: '1', totals,
+    }) })
+  })
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    return String(input) === '/experimental/recipes/calculate'
+      ? pendingCalculation
+      : { ok: true, json: async () => ({ items: [] }) }
+  }))
+  render(<App />)
+  fireEvent.click(screen.getByRole('link', { name: 'สูตรอาหาร' }))
+  fireEvent.click(screen.getByRole('button', { name: 'ปรับสูตรนี้ในแบบร่าง' }))
+  for (let index = 0; index < 10; index++) {
+    fireEvent.change(screen.getAllByLabelText('ปริมาณที่ใช้ในสูตร')[index], { target: { value: '100' } })
+    fireEvent.change(screen.getAllByLabelText('ปริมาณฐานสารอาหาร')[index], { target: { value: '100' } })
+    fireEvent.change(screen.getAllByLabelText('หน่วยปริมาณ')[index], { target: { value: 'g' } })
+    if (index !== 3 && index !== 6) fireEvent.change(screen.getAllByLabelText('สภาพอาหาร')[index], { target: { value: 'raw' } })
+  }
+  const review = screen.getByLabelText(/ตรวจชื่อ สภาพอาหาร หน่วย ปริมาณ/)
+  fireEvent.click(review)
+  fireEvent.click(screen.getByLabelText(/ยืนยันว่ากำลังทดสอบด้วยสูตรสมมติ/))
+  const calculation = screen.getByRole('button', { name: 'คำนวณสารอาหาร' })
+  expect(calculation).toHaveProperty('disabled', false)
+  fireEvent.submit(calculation.closest('form')!)
+  expect(review).toHaveProperty('disabled', true)
+  fireEvent.click(review)
+  expect(review).toHaveProperty('checked', true)
+
+  finishCalculation()
+  await screen.findByRole('heading', { name: /สารอาหารโดยประมาณ/ })
+  fireEvent.click(review)
+  expect(review).toHaveProperty('checked', false)
+  expect(screen.queryByRole('heading', { name: /สารอาหารโดยประมาณ/ })).toBeNull()
+}, 15000)
