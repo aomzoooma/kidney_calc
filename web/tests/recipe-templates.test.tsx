@@ -35,12 +35,16 @@ it('shows attributed source and opens editable blank-weight recipe draft', () =>
   expect(states[0]).toHaveProperty('value', '')
   expect(states[3]).toHaveProperty('value', 'cooked')
   expect(states[6]).toHaveProperty('value', 'cooked')
-  for (let index = 0; index < 10; index++) {
-    fireEvent.change(screen.getAllByLabelText('ปริมาณที่ใช้ในสูตร')[index], { target: { value: '100' } })
-    fireEvent.change(screen.getAllByLabelText('ปริมาณฐานสารอาหาร')[index], { target: { value: '100' } })
-    fireEvent.change(units[index], { target: { value: 'g' } })
-    if (index !== 3 && index !== 6) fireEvent.change(states[index], { target: { value: 'raw' } })
+  // Keep the complete source-row assertions above, then use one row for the
+  // review gate. Editing all ten rows here caused dozens of full-App renders
+  // and made this test exceed CI's timeout without adding coverage.
+  for (let index = 10; index > 1; index--) {
+    fireEvent.click(screen.getByRole('button', { name: `ลบวัตถุดิบ ${index}` }))
   }
+  fireEvent.change(screen.getByLabelText('ปริมาณที่ใช้ในสูตร'), { target: { value: '100' } })
+  fireEvent.change(screen.getByLabelText('ปริมาณฐานสารอาหาร'), { target: { value: '100' } })
+  fireEvent.change(screen.getByLabelText('หน่วยปริมาณ'), { target: { value: 'g' } })
+  fireEvent.change(screen.getByLabelText('สภาพอาหาร'), { target: { value: 'raw' } })
   fireEvent.click(review)
   expect(calculation).toHaveProperty('disabled', false)
   fireEvent.change(screen.getAllByLabelText('ชื่อวัตถุดิบ')[0], { target: { value: 'แก้ชื่อแล้ว' } })
