@@ -33,8 +33,11 @@ def _portion(value):
 def _consumed_at(value):
     if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("consumed_at must be a timezone-aware datetime")
-    local_date = value.astimezone(BANGKOK).date().isoformat()
-    utc_timestamp = value.astimezone(timezone.utc).isoformat(timespec="microseconds")
+    try:
+        local_date = value.astimezone(BANGKOK).date().isoformat()
+        utc_timestamp = value.astimezone(timezone.utc).isoformat(timespec="microseconds")
+    except OverflowError as exc:
+        raise ValueError("consumed_at is outside the supported date range") from exc
     return utc_timestamp, local_date
 
 

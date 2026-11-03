@@ -529,6 +529,8 @@ class ExperimentalMealApiTest(unittest.TestCase):
             {**valid, 'consumed_at': '2026-01-03T17:30:00'},
             {**valid, 'consumed_at': 0},
             {**valid, 'consumed_at': '0'},
+            {**valid, 'consumed_at': '0001-01-01T00:00:00+14:00'},
+            {**valid, 'consumed_at': '9999-12-31T23:59:59-12:00'},
             {**valid, 'recipe_id': 9223372036854775808},
             {**valid, 'portion': '0'},
             {**valid, 'portion': '1.01'},
