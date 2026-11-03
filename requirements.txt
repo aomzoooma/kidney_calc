@@ -3,3 +3,4 @@ uvicorn==0.39.0
 httpx==0.28.1
 Pillow==13.0.0
 tzdata==2026.2; platform_system == "Windows"
+cryptography==46.0.4
